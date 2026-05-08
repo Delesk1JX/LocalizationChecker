@@ -172,7 +172,7 @@ python check_localization.py /path/to/mods -o report.json
 ### Пример 3: Анализ недостающих ключей
 Откройте `report.json` и посмотрите поле `missing_keys` для модов со статусом `partial` — это точный список того, что нужно перевести.
 
-# Для создания использовался Qwen Coder
+## Для создания использовался Qwen Coder
 
 ## 📝 Лицензия
 
