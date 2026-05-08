@@ -462,11 +462,18 @@ def scan_jars_directory(base_path: Path, progress_callback=None) -> Dict[str, Li
     total = len(jar_files)
     
     # Используем многопоточность для ускорения обработки
+    processed_count = 0
     with ThreadPoolExecutor(max_workers=4) as executor:
         future_to_jar = {executor.submit(check_jar_localization, jar): jar for jar in jar_files}
         
         for i, future in enumerate(as_completed(future_to_jar)):
             jar_result = future.result()
+            
+            # Пропускаем моды без файлов локализации (статус skipped)
+            if jar_result["status"] == "skipped":
+                if progress_callback:
+                    progress_callback(i + 1, total)
+                continue
             
             if jar_result["status"] == "full":
                 results["full"].append(jar_result)
@@ -474,8 +481,8 @@ def scan_jars_directory(base_path: Path, progress_callback=None) -> Dict[str, Li
                 results["partial"].append(jar_result)
             elif jar_result["status"] == "missing":
                 results["missing"].append(jar_result)
-            # Если статус "skipped", мод не учитывается
             
+            processed_count += 1
             if progress_callback:
                 progress_callback(i + 1, total)
     
@@ -688,7 +695,7 @@ class LocalizationCheckerGUI:
         
         if self.results:
             total = len(self.results["full"]) + len(self.results["partial"]) + len(self.results["missing"])
-            messagebox.showinfo("Готово", f"Проверено {total} модов.\nРезультаты отображены во вкладках.")
+            messagebox.showinfo("Готово", f"Проверено {total} модов (только с файлами локализации).\nРезультаты отображены во вкладках.")
     
     def show_details(self, tree):
         """Показывает детали выбранного мода."""
@@ -863,15 +870,16 @@ def main_cli():
     
     results = scan_jars_directory(base_path)
     
+    # Считаем только моды, которые действительно проверены (не пропущены)
     total_mods = len(results["full"]) + len(results["partial"]) + len(results["missing"])
     
     if total_mods == 0:
-        print("⚠️  .jar файлы модов не найдены!")
+        print("⚠️  .jar файлы с файлами локализации не найдены или все пропущены!")
         return 1
     
     # Вывод статистики
     print("\n" + "=" * 60)
-    print("СТАТИСТИКА:")
+    print("СТАТИСТИКА (только моды с файлами локализации):")
     print(f"   Всего модов проверено: {total_mods}")
     print(f"   [100%] С полным переводом: {len(results['full'])}")
     print(f"   [Частично] С неполным переводом: {len(results['partial'])}")
