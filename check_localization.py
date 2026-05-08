@@ -33,8 +33,43 @@ except ImportError:
     GUI_AVAILABLE = False
 
 
-# Глобальная переменная для пути к папке RTFE
+# Глобальные переменные
 RTFE_PATH: Optional[Path] = None
+CONFIG: Dict[str, Any] = {}
+
+
+def load_config(config_file: str = "config.json") -> Dict[str, Any]:
+    """
+    Загружает конфигурацию из JSON файла.
+    
+    Args:
+        config_file: Путь к файлу конфига
+        
+    Returns:
+        Словарь с конфигурацией или значения по умолчанию
+    """
+    global CONFIG
+    try:
+        config_path = Path(config_file)
+        if config_path.exists():
+            with open(config_path, 'r', encoding='utf-8') as f:
+                CONFIG = json.load(f)
+                # Устанавливаем RTFE_PATH из конфига, если указан
+                if CONFIG.get("rtfe_path"):
+                    set_rtfe_path(Path(CONFIG["rtfe_path"]))
+                return CONFIG
+    except Exception as e:
+        print(f"⚠️  Ошибка загрузки конфига: {e}")
+    
+    # Значения по умолчанию
+    CONFIG = {
+        "rtfe_path": None,
+        "supported_languages": ["ru_ru"],
+        "max_workers": 4,
+        "show_statistics": True,
+        "default_export_file": "localization_results.json"
+    }
+    return CONFIG
 
 
 def set_rtfe_path(path: Optional[Path]):
@@ -318,6 +353,7 @@ def extract_json_from_jar(jar_path: Path, lang_path: str) -> Optional[Dict[str, 
 def find_lang_files_in_jar(jar_path: Path) -> Tuple[Optional[str], Optional[str], bool]:
     """
     Ищет файлы en_us.json и ru_ru.json внутри .jar файла.
+    Оптимизирована: ранний выход при отсутствии /lang/, завершает поиск после нахождения en_us.
     
     Returns:
         Tuple[путь_к_en_us, путь_к_ru_ru, есть ли папка lang] внутри архива
@@ -330,11 +366,18 @@ def find_lang_files_in_jar(jar_path: Path) -> Tuple[Optional[str], Optional[str]
         with zipfile.ZipFile(jar_path, 'r') as jar_file:
             for name in jar_file.namelist():
                 normalized = name.replace('\\', '/').lower()
-                if '/lang/' in normalized:
-                    has_lang_dir = True
-                # Ищем файлы локализации в папках lang
+                
+                # Ранний выход: пропускаем файлы без /lang/ в пути
+                if '/lang/' not in normalized:
+                    continue
+                
+                has_lang_dir = True
+                
+                # Ищем файлы локализации
                 if normalized.endswith('/lang/en_us.json'):
                     en_us_path = name
+                    # Прерываем цикл, если нашли en_us (он обязателен)
+                    break
                 elif normalized.endswith('/lang/ru_ru.json'):
                     ru_ru_path = name
     except zipfile.BadZipFile:
@@ -479,7 +522,8 @@ def scan_jars_directory(base_path: Path, progress_callback=None) -> Dict[str, Li
     
     # Используем многопоточность для ускорения обработки
     processed_count = 0
-    with ThreadPoolExecutor(max_workers=4) as executor:
+    max_workers = CONFIG.get("max_workers", 4)
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_jar = {executor.submit(check_jar_localization, jar): jar for jar in jar_files}
         
         for i, future in enumerate(as_completed(future_to_jar)):
@@ -549,6 +593,33 @@ class LocalizationCheckerGUI:
         
         self.progress_bar = ttk.Progressbar(self.progress_frame, mode='determinate', length=400)
         self.progress_bar.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+        
+        # Панель поиска и фильтрации
+        search_frame = ttk.Frame(self.root, padding="10")
+        search_frame.pack(fill=tk.X)
+        
+        ttk.Label(search_frame, text="🔍 Поиск по имени:").pack(side=tk.LEFT, padx=5)
+        self.search_var = tk.StringVar()
+        self.search_var.trace_add("write", self.on_search_change)
+        search_entry = ttk.Entry(search_frame, textvariable=self.search_var, width=30)
+        search_entry.pack(side=tk.LEFT, padx=5)
+        
+        ttk.Button(search_frame, text="Очистить", command=lambda: self.search_var.set("")).pack(side=tk.LEFT, padx=2)
+        
+        # Кнопки фильтрации
+        ttk.Separator(search_frame, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=10)
+        ttk.Label(search_frame, text="Фильтр:").pack(side=tk.LEFT, padx=5)
+        
+        self.filter_var = tk.StringVar(value="all")
+        filter_combo = ttk.Combobox(
+            search_frame, 
+            textvariable=self.filter_var,
+            values=["all", "Полный", "Неполный", "Отсутствует"],
+            state="readonly",
+            width=15
+        )
+        filter_combo.pack(side=tk.LEFT, padx=5)
+        filter_combo.bind("<<ComboboxSelected>>", lambda e: self.apply_filter())
         
         # Основная область с результатами
         main_frame = ttk.Frame(self.root, padding="10")
@@ -666,34 +737,8 @@ class LocalizationCheckerGUI:
         if not self.results:
             return
         
-        # Заполняем вкладку "Полный перевод"
-        for mod in self.results["full"]:
-            self.full_tree.insert("", tk.END, values=(
-                mod["mod_name"],
-                mod["ru_keys"],
-                mod["en_keys"],
-                f"{mod['percentage']}%"
-            ))
-        
-        # Заполняем вкладку "Неполный перевод"
-        for mod in self.results["partial"]:
-            missing_count = len(mod["missing_keys"])
-            self.partial_tree.insert("", tk.END, values=(
-                mod["mod_name"],
-                mod["ru_keys"],
-                mod["en_keys"],
-                f"{mod['percentage']}%",
-                f"{missing_count} ключей"
-            ))
-        
-        # Заполняем вкладку "Отсутствует"
-        for mod in self.results["missing"]:
-            reason = mod.get("error", "Нет ru_ru.json")
-            self.missing_tree.insert("", tk.END, values=(
-                mod["mod_name"],
-                mod["en_keys"],
-                reason
-            ))
+        # Применяем фильтр для отображения результатов
+        self.apply_filter()
         
         # Обновляем статус
         total = len(self.results["full"]) + len(self.results["partial"]) + len(self.results["missing"])
@@ -708,6 +753,59 @@ class LocalizationCheckerGUI:
         self.select_btn.config(state=tk.NORMAL)
         self.export_btn.config(state=tk.NORMAL)
         self.progress_label.config(text="Проверка завершена")
+    
+    def on_search_change(self, *args):
+        """Обработчик изменения текста поиска."""
+        self.apply_filter()
+    
+    def apply_filter(self):
+        """Применяет фильтр поиска к таблицам."""
+        search_text = self.search_var.get().lower()
+        filter_type = self.filter_var.get()
+        
+        # Очищаем все таблицы
+        for item in self.full_tree.get_children():
+            self.full_tree.delete(item)
+        for item in self.partial_tree.get_children():
+            self.partial_tree.delete(item)
+        for item in self.missing_tree.get_children():
+            self.missing_tree.delete(item)
+        
+        if not self.results:
+            return
+        
+        # Показываем результаты в зависимости от фильтра
+        if filter_type in ("all", "Полный"):
+            for mod in self.results["full"]:
+                if search_text in mod["mod_name"].lower():
+                    self.full_tree.insert("", tk.END, values=(
+                        mod["mod_name"],
+                        mod["ru_keys"],
+                        mod["en_keys"],
+                        f"{mod['percentage']}%"
+                    ))
+        
+        if filter_type in ("all", "Неполный"):
+            for mod in self.results["partial"]:
+                if search_text in mod["mod_name"].lower():
+                    missing_count = len(mod["missing_keys"])
+                    self.partial_tree.insert("", tk.END, values=(
+                        mod["mod_name"],
+                        mod["ru_keys"],
+                        mod["en_keys"],
+                        f"{mod['percentage']}%",
+                        f"{missing_count} ключей"
+                    ))
+        
+        if filter_type in ("all", "Отсутствует"):
+            for mod in self.results["missing"]:
+                if search_text in mod["mod_name"].lower():
+                    reason = mod.get("error", "Нет ru_ru.json")
+                    self.missing_tree.insert("", tk.END, values=(
+                        mod["mod_name"],
+                        mod["en_keys"],
+                        reason
+                    ))
         
         if self.results:
             total = len(self.results["full"]) + len(self.results["partial"]) + len(self.results["missing"])
@@ -807,6 +905,7 @@ class LocalizationCheckerGUI:
 
 def main_gui():
     """Запускает графический интерфейс."""
+    load_config()  # Загружаем конфигурацию при запуске
     root = tk.Tk()
     app = LocalizationCheckerGUI(root)
     root.mainloop()
@@ -814,6 +913,7 @@ def main_gui():
 
 def main_cli():
     """Запускает консольную версию."""
+    load_config()  # Загружаем конфигурацию при запуске
     parser = argparse.ArgumentParser(
         description="Проверка русской локализации в .jar файлах модов Minecraft",
         formatter_class=argparse.RawDescriptionHelpFormatter,
