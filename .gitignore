@@ -1,1 +1,30 @@
-Nothing should be ignored based on the provided file changes. The modified files (`check_localization.py` and `check_localization.pyw`) are Python source files that should be tracked in version control.
+```
+# Compiled Python files
+*.pyc
+__pycache__/
+
+# Logs and temp files
+*.log
+*.tmp
+*.swp
+
+# Environment
+.env
+.env.local
+*.env.*
+
+# Editors
+.vscode/
+.idea/
+
+# Python specific
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+.eggs/
+.coverage
+htmlcov/
+.pytest_cache/
+.mypy_cache/
+```
