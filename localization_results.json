@@ -1,0 +1,35 @@
+{
+  "scan_directory": "/workspace/test_mods",
+  "total_mods": 3,
+  "summary": {
+    "full_translation": 1,
+    "partial_translation": 1,
+    "missing_translation": 1
+  },
+  "mods": {
+    "full": [
+      {
+        "mod_name": "mod_full",
+        "ru_keys": 4,
+        "en_keys": 4,
+        "percentage": 100.0
+      }
+    ],
+    "partial": [
+      {
+        "mod_name": "mod_partial",
+        "ru_keys": 3,
+        "en_keys": 5,
+        "percentage": 60.0
+      }
+    ],
+    "missing": [
+      {
+        "mod_name": "mod_no_ru",
+        "ru_keys": 0,
+        "en_keys": 2,
+        "percentage": 0.0
+      }
+    ]
+  }
+}
