@@ -1,36 +1,3 @@
 ```
-# Python
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-
-# JAR files (typically build artifacts)
-*.jar
-
-# Test mods directory (if it contains generated/compiled content)
-test_mods/
-
-# Logs and temp files
-*.log
-*.tmp
-
-# Environment files
-.env
-.env.local
-*.env.*
-
-# Editors
-.vscode/
-.idea/
-
-# Coverage reports
-.coverage
-coverage/
-htmlcov/
-
-# Build artifacts
-build/
-dist/
-target/
+localization_results.json
 ```
