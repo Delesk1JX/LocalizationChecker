@@ -1,0 +1,7 @@
+{
+  "rtfe_path": "RTFE",
+  "supported_languages": ["ru_ru"],
+  "max_workers": 4,
+  "show_statistics": true,
+  "default_export_file": "localization_results.json"
+}
