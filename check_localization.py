@@ -387,6 +387,12 @@ def check_jar_localization(jar_path: Path) -> Dict[str, Any]:
     
     result["en_keys"] = len(en_data)
     
+    if result["en_keys"] == 0:
+        # Если en_us.json есть, но не содержит ключей, мод не учитывается
+        result["status"] = "skipped"
+        result["error"] = "Файл en_us.json пустой (мод пропущен)"
+        return result
+    
     # Сначала проверяем ru_ru.json внутри .jar файла
     if ru_ru_path is not None:
         ru_data = extract_json_from_jar(jar_path, ru_ru_path)
