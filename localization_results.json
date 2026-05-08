@@ -1,0 +1,26 @@
+{
+  "scan_directory": "/workspace/test_ali",
+  "total_mods": 1,
+  "summary": {
+    "full_translation": 0,
+    "partial_translation": 0,
+    "missing_translation": 1
+  },
+  "mods": {
+    "full": [],
+    "partial": [],
+    "missing": [
+      {
+        "mod_name": "AdvancedLootInfo-forge-1.20.1-1.10.0.jar",
+        "status": "missing",
+        "source": "none",
+        "ru_keys": 0,
+        "en_keys": 366,
+        "percentage": 0.0,
+        "missing_keys": [],
+        "extra_keys": [],
+        "error": null
+      }
+    ]
+  }
+}

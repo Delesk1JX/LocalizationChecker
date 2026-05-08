@@ -2,6 +2,7 @@
 """
 Программа для проверки русской локализации в модах Minecraft.
 Работает напрямую с .jar файлами, проверяет наличие ru_ru.json и сравнивает ключи с en_us.json.
+Также поддерживает проверку переводов в ресурспаке RTF:E (папка RTFE).
 
 Категории:
 - Полный перевод: 100% совпадение ключей с en_us.json (все ключи из en_us есть в ru_ru)
@@ -30,6 +31,253 @@ try:
     GUI_AVAILABLE = True
 except ImportError:
     GUI_AVAILABLE = False
+
+
+# Глобальная переменная для пути к папке RTFE
+RTFE_PATH: Optional[Path] = None
+
+
+def set_rtfe_path(path: Optional[Path]):
+    """Устанавливает путь к папке RTFE."""
+    global RTFE_PATH
+    RTFE_PATH = path
+
+
+def get_rtfe_path() -> Optional[Path]:
+    """Возвращает текущий путь к папке RTFE."""
+    return RTFE_PATH
+
+
+def find_rtfe_directory(base_path: Path) -> Optional[Path]:
+    """
+    Ищет папку RTFE рядом с указанной директорией, в ней или внутри HelperTranslatorRU.
+    
+    Args:
+        base_path: Базовая директория для поиска
+        
+    Returns:
+        Путь к папке RTFE или None если не найдена
+    """
+    # Проверяем несколько возможных мест расположения RTFE
+    possible_paths = [
+        base_path / "RTFE",
+        base_path.parent / "RTFE",
+        Path.cwd() / "RTFE",
+        base_path / "HelperTranslatorRU" / "RTFE",
+        base_path.parent / "HelperTranslatorRU" / "RTFE",
+        Path.cwd() / "HelperTranslatorRU" / "RTFE",
+    ]
+    
+    for path in possible_paths:
+        if path.exists() and path.is_dir():
+            return path
+    
+    return None
+
+
+def extract_json_from_file(file_path: Path) -> Optional[Dict[str, str]]:
+    """
+    Извлекает JSON файл локализации из файловой системы.
+    
+    Args:
+        file_path: Путь к JSON файлу
+        
+    Returns:
+        Словарь с ключами локализации или None, если файл не найден/ошибка
+    """
+    try:
+        if not file_path.exists():
+            return None
+        
+        with open(file_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+            data = json.loads(content)
+            return data
+    except (json.JSONDecodeError, UnicodeDecodeError, KeyError) as e:
+        print(f"⚠️  Ошибка чтения {file_path}: {e}")
+        return None
+    except Exception as e:
+        print(f"⚠️  Неожиданная ошибка при чтении {file_path}: {e}")
+        return None
+
+
+def find_ru_ru_in_rtfe(mod_name: str) -> Optional[Path]:
+    """
+    Ищет файл ru_ru.json для мода в папке RTFE.
+    
+    Структура RTFE:
+    RTFE/
+    ├── <название_мода>/
+    │   └── lang/
+    │       └── ru_ru.json
+    
+    Args:
+        mod_name: Название мода (извлеченное из assets внутри .jar файла)
+        
+    Returns:
+        Путь к файлу ru_ru.json или None если не найден
+    """
+    if RTFE_PATH is None:
+        return None
+    
+    # mod_name уже является чистым именем мода из assets
+    possible_names = [mod_name]
+    
+    # Пробуем найти папку мода в RTFE
+    for name in possible_names:
+        mod_dir = RTFE_PATH / name
+        if mod_dir.exists() and mod_dir.is_dir():
+            ru_ru_path = mod_dir / "lang" / "ru_ru.json"
+            if ru_ru_path.exists():
+                return ru_ru_path
+    
+    # Если точное совпадение не найдено, ищем по частичному совпадению
+    if RTFE_PATH.exists():
+        for item in RTFE_PATH.iterdir():
+            if item.is_dir():
+                # Проверяем, содержит ли название папки название мода или наоборот
+                if mod_name.lower() in item.name.lower() or item.name.lower() in mod_name.lower():
+                    ru_ru_path = item / "lang" / "ru_ru.json"
+                    if ru_ru_path.exists():
+                        return ru_ru_path
+        
+        # Дополнительная проверка: если имя папки является аббревиатурой или префиксом
+        # Например, ali -> advancedlootinfo (a-l-i первые буквы слов)
+        import re
+        # Разбиваем mod_name на слова (по заглавным буквам или подчеркиваниям)
+        words = re.split(r'[_-]', mod_name.lower())
+        if len(words) == 1:
+            # Если одно слово, пробуем разбить по заглавным буквам
+            words = re.findall(r'[a-z]+', mod_name.lower())
+        
+        # Создаем аббревиатуру из первых букв слов
+        if len(words) > 1:
+            abbrev = ''.join([w[0] for w in words if w])
+            for item in RTFE_PATH.iterdir():
+                if item.is_dir() and item.name.lower() == abbrev:
+                    ru_ru_path = item / "lang" / "ru_ru.json"
+                    if ru_ru_path.exists():
+                        return ru_ru_path
+        
+        # Также проверяем, начинается ли mod_name с названия папки
+        for item in RTFE_PATH.iterdir():
+            if item.is_dir() and len(item.name) >= 2:
+                # Проверяем первые несколько букв
+                if mod_name.lower().startswith(item.name.lower()):
+                    ru_ru_path = item / "lang" / "ru_ru.json"
+                    if ru_ru_path.exists():
+                        return ru_ru_path
+    
+    return None
+
+
+def extract_mod_name_from_assets(jar_path: Path) -> Optional[str]:
+    """
+    Извлекает имя мода из структуры папок assets внутри .jar файла.
+    
+    Например, если внутри .jar есть путь 'assets/advancedlootinfo/lang/en_us.json',
+    то имя мода будет 'advancedlootinfo'.
+    
+    Args:
+        jar_path: Путь к .jar файлу
+        
+    Returns:
+        Имя мода или None если не удалось извлечь
+    """
+    try:
+        with zipfile.ZipFile(jar_path, 'r') as jar_file:
+            for name in jar_file.namelist():
+                # Ищем файлы в папке assets/<modname>/lang/
+                if '/lang/' in name or '\\\\lang\\\\' in name:
+                    # Извлекаем путь до lang
+                    parts = name.replace('\\\\', '/').split('/')
+                    # Находим индекс 'assets' и берем следующий элемент
+                    for i, part in enumerate(parts):
+                        if part == 'assets' and i + 1 < len(parts):
+                            mod_name = parts[i + 1]
+                            if mod_name and mod_name != 'lang':
+                                return mod_name
+    except zipfile.BadZipFile:
+        return None
+    
+    return None
+
+
+def check_rtfe_localization(jar_path: Path, en_data: Dict[str, str], en_us_path: str) -> Dict[str, Any]:
+    """
+    Проверяет наличие перевода для мода в папке RTFE.
+    
+    Args:
+        jar_path: Путь к .jar файлу мода
+        en_data: Данные из en_us.json внутри .jar файла
+        en_us_path: Путь к en_us.json внутри архива
+        
+    Returns:
+        Словарь с результатами проверки или None если RTFE не настроен
+    """
+    result = {
+        "found": False,
+        "status": "not_found",  # full, partial, not_found
+        "source": None,  # "rtfe" или None
+        "ru_keys": 0,
+        "en_keys": len(en_data),
+        "percentage": 0.0,
+        "missing_keys": [],
+        "extra_keys": [],
+        "error": None
+    }
+    
+    if RTFE_PATH is None:
+        return result
+    
+    # Извлекаем имя мода из assets внутри .jar файла
+    mod_name = extract_mod_name_from_assets(jar_path)
+    
+    if mod_name is None:
+        result["error"] = "Не удалось извлечь имя мода из assets"
+        return result
+    
+    # Ищем ru_ru.json в RTFE используя имя мода из assets
+    ru_ru_path = find_ru_ru_in_rtfe(mod_name)
+    
+    if ru_ru_path is None:
+        return result
+    
+    # Извлекаем данные из ru_ru.json
+    ru_data = extract_json_from_file(ru_ru_path)
+    
+    if ru_data is None:
+        result["error"] = f"Не удалось прочитать {ru_ru_path}"
+        return result
+    
+    result["found"] = True
+    result["source"] = "rtfe"
+    result["ru_keys"] = len(ru_data)
+    
+    en_keys_set = set(en_data.keys())
+    ru_keys_set = set(ru_data.keys())
+    
+    # Находим недостающие ключи
+    missing_keys = en_keys_set - ru_keys_set
+    extra_keys = ru_keys_set - en_keys_set
+    
+    result["missing_keys"] = sorted(list(missing_keys))
+    result["extra_keys"] = sorted(list(extra_keys))
+    
+    # Вычисляем процент
+    if result["en_keys"] == 0:
+        result["percentage"] = 0.0
+        result["status"] = "not_found"
+    else:
+        present_keys = en_keys_set & ru_keys_set
+        result["percentage"] = round((len(present_keys) / result["en_keys"]) * 100, 2)
+        
+        if result["percentage"] == 100.0:
+            result["status"] = "full"
+        else:
+            result["status"] = "partial"
+    
+    return result
 
 
 def extract_json_from_jar(jar_path: Path, lang_path: str) -> Optional[Dict[str, str]]:
@@ -94,6 +342,8 @@ def find_lang_files_in_jar(jar_path: Path) -> Tuple[Optional[str], Optional[str]
 def check_jar_localization(jar_path: Path) -> Dict[str, Any]:
     """
     Проверяет локализацию в одном .jar файле.
+    Сначала проверяет наличие ru_ru.json внутри .jar файла.
+    Если не найден, проверяет наличие перевода в папке RTFE.
     
     Returns:
         Словарь с результатами проверки
@@ -101,6 +351,7 @@ def check_jar_localization(jar_path: Path) -> Dict[str, Any]:
     result = {
         "mod_name": jar_path.name,
         "status": "missing",  # full, partial, missing
+        "source": "none",  # "jar", "rtfe", "none"
         "ru_keys": 0,
         "en_keys": 0,
         "percentage": 0.0,
@@ -118,56 +369,70 @@ def check_jar_localization(jar_path: Path) -> Dict[str, Any]:
         result["error"] = "Файл en_us.json не найден в архиве (мод пропущен)"
         return result
     
-    if ru_ru_path is None:
-        # Нет русского файла
-        en_data = extract_json_from_jar(jar_path, en_us_path)
-        if en_data:
-            result["en_keys"] = len(en_data)
-        result["status"] = "missing"
-        return result
-    
-    # Извлекаем оба файла
+    # Извлекаем en_us.json для сравнения
     en_data = extract_json_from_jar(jar_path, en_us_path)
-    ru_data = extract_json_from_jar(jar_path, ru_ru_path)
-    
     if en_data is None:
         result["error"] = "Не удалось прочитать en_us.json"
         return result
     
-    if ru_data is None:
-        result["error"] = "Не удалось прочитать ru_ru.json"
-        result["en_keys"] = len(en_data)
-        result["status"] = "missing"
-        return result
+    result["en_keys"] = len(en_data)
     
-    en_keys_set = set(en_data.keys())
-    ru_keys_set = set(ru_data.keys())
-    
-    result["en_keys"] = len(en_keys_set)
-    result["ru_keys"] = len(ru_keys_set)
-    
-    # Находим недостающие ключи (те, что есть в en_us, но нет в ru_ru)
-    missing_keys = en_keys_set - ru_keys_set
-    # Находим лишние ключи (те, что есть в ru_ru, но нет в en_us) - для обратной совместимости
-    extra_keys = ru_keys_set - en_keys_set
-    
-    result["missing_keys"] = sorted(list(missing_keys))
-    result["extra_keys"] = sorted(list(extra_keys))
-    
-    # Вычисляем процент на основе ключей из en_us, которые есть в ru_ru
-    if result["en_keys"] == 0:
-        result["percentage"] = 0.0
-        result["status"] = "missing"
-    else:
-        present_keys = en_keys_set & ru_keys_set
-        result["percentage"] = round((len(present_keys) / result["en_keys"]) * 100, 2)
+    # Сначала проверяем ru_ru.json внутри .jar файла
+    if ru_ru_path is not None:
+        ru_data = extract_json_from_jar(jar_path, ru_ru_path)
         
-        # ТОЛЬКО 100% считается полным переводом
-        if result["percentage"] == 100.0:
-            result["status"] = "full"
-        else:
-            result["status"] = "partial"
+        if ru_data is not None:
+            # Есть встроенный перевод
+            result["source"] = "jar"
+            en_keys_set = set(en_data.keys())
+            ru_keys_set = set(ru_data.keys())
+            
+            result["ru_keys"] = len(ru_keys_set)
+            
+            # Находим недостающие ключи
+            missing_keys = en_keys_set - ru_keys_set
+            extra_keys = ru_keys_set - en_keys_set
+            
+            result["missing_keys"] = sorted(list(missing_keys))
+            result["extra_keys"] = sorted(list(extra_keys))
+            
+            # Вычисляем процент
+            if result["en_keys"] == 0:
+                result["percentage"] = 0.0
+                result["status"] = "missing"
+            else:
+                present_keys = en_keys_set & ru_keys_set
+                result["percentage"] = round((len(present_keys) / result["en_keys"]) * 100, 2)
+                
+                if result["percentage"] == 100.0:
+                    result["status"] = "full"
+                else:
+                    result["status"] = "partial"
+            
+            return result
     
+    # Если встроенного перевода нет, проверяем RTFE
+    if RTFE_PATH is not None:
+        rtfe_result = check_rtfe_localization(jar_path, en_data, en_us_path)
+        
+        if rtfe_result["found"]:
+            result["source"] = "rtfe"
+            result["ru_keys"] = rtfe_result["ru_keys"]
+            result["percentage"] = rtfe_result["percentage"]
+            result["missing_keys"] = rtfe_result["missing_keys"]
+            result["extra_keys"] = rtfe_result["extra_keys"]
+            
+            if rtfe_result["status"] == "full":
+                result["status"] = "full"
+            elif rtfe_result["status"] == "partial":
+                result["status"] = "partial"
+            else:
+                result["status"] = "missing"
+            
+            return result
+    
+    # Перевода нет ни в .jar, ни в RTFE
+    result["status"] = "missing"
     return result
 
 
@@ -320,6 +585,20 @@ class LocalizationCheckerGUI:
             self.select_btn.config(text=f"📁 {self.current_path.name}")
             self.check_btn.config(state=tk.NORMAL)
             self.status_label.config(text=f"Папка выбрана: {self.current_path}", foreground="black")
+            
+            # Автоматически ищем папку RTFE
+            rtfe_path = find_rtfe_directory(self.current_path)
+            if rtfe_path:
+                set_rtfe_path(rtfe_path)
+                self.status_label.config(
+                    text=f"Папка выбрана: {self.current_path} | RTFE найден: {rtfe_path}", 
+                    foreground="blue"
+                )
+            else:
+                self.status_label.config(
+                    text=f"Папка выбрана: {self.current_path} | RTFE не найден", 
+                    foreground="orange"
+                )
     
     def update_progress(self, current, total):
         """Обновляет индикатор прогресса."""
@@ -443,6 +722,7 @@ class LocalizationCheckerGUI:
         
         details = f"Мод: {mod_info['mod_name']}\n"
         details += f"Статус: {mod_info['status']}\n"
+        details += f"Источник: {mod_info.get('source', 'none')}\n"
         details += f"Ключей в RU: {mod_info['ru_keys']}\n"
         details += f"Ключей в EN: {mod_info['en_keys']}\n"
         details += f"Процент: {mod_info['percentage']}%\n\n"
@@ -543,6 +823,13 @@ def main_cli():
         help="Запустить графический интерфейс"
     )
     
+    parser.add_argument(
+        "--rtfe",
+        type=str,
+        default=None,
+        help="Путь к папке RTFE с переводами (необязательно)"
+    )
+    
     args = parser.parse_args()
     
     if args.gui:
@@ -554,6 +841,22 @@ def main_cli():
     if not base_path.exists():
         print(f"❌ Ошибка: Директория '{base_path}' не существует")
         return 1
+    
+    # Ищем и устанавливаем путь к RTFE
+    rtfe_path = None
+    if args.rtfe:
+        rtfe_path = Path(args.rtfe)
+        if not rtfe_path.exists():
+            print(f"⚠️  Предупреждение: Указанная папка RTFE не существует: {rtfe_path}")
+            rtfe_path = None
+    else:
+        rtfe_path = find_rtfe_directory(base_path)
+    
+    if rtfe_path:
+        set_rtfe_path(rtfe_path)
+        print(f"📦 RTFE найден: {rtfe_path}")
+    else:
+        print("📦 RTFE не найден (проверка только встроенных переводов)")
     
     print(f"🔍 Сканирование директории: {base_path}")
     print("-" * 60)
