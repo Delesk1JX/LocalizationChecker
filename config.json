@@ -1,5 +1,5 @@
 {
-  "rtfe_path": null,
+  "rtfe_path": "RTFE",
   "supported_languages": ["ru_ru"],
   "max_workers": 4,
   "show_statistics": true,

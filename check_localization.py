@@ -56,14 +56,24 @@ def load_config(config_file: str = "config.json") -> Dict[str, Any]:
                 CONFIG = json.load(f)
                 # Устанавливаем RTFE_PATH из конфига, если указан
                 if CONFIG.get("rtfe_path"):
-                    set_rtfe_path(Path(CONFIG["rtfe_path"]))
+                    rtfe_path = Path(CONFIG["rtfe_path"])
+                    # Проверяем несколько возможных расположений
+                    possible_paths = [
+                        rtfe_path,
+                        Path.cwd() / rtfe_path,
+                        Path.cwd().parent / rtfe_path,
+                    ]
+                    for path in possible_paths:
+                        if path.exists() and path.is_dir():
+                            set_rtfe_path(path)
+                            break
                 return CONFIG
     except Exception as e:
         print(f"⚠️  Ошибка загрузки конфига: {e}")
     
     # Значения по умолчанию
     CONFIG = {
-        "rtfe_path": None,
+        "rtfe_path": "RTFE",
         "supported_languages": ["ru_ru"],
         "max_workers": 4,
         "show_statistics": True,
