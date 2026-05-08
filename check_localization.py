@@ -763,6 +763,12 @@ class LocalizationCheckerGUI:
         self.select_btn.config(state=tk.NORMAL)
         self.export_btn.config(state=tk.NORMAL)
         self.progress_label.config(text="Проверка завершена")
+        
+        # Показываем окно только после завершения проверки пользователем
+        if self.results:
+            total = len(self.results["full"]) + len(self.results["partial"]) + len(self.results["missing"])
+            if total > 0:
+                messagebox.showinfo("Готово", f"Проверено {total} модов.\nРезультаты отображены во вкладках.")
     
     def on_search_change(self, *args):
         """Обработчик изменения текста поиска."""
@@ -816,13 +822,6 @@ class LocalizationCheckerGUI:
                         mod["en_keys"],
                         reason
                     ))
-        
-        if self.results:
-            total = len(self.results["full"]) + len(self.results["partial"]) + len(self.results["missing"])
-            # Показываем окно только если проверка была запущена пользователем и есть результаты
-            # Не показываем при каждом действии в интерфейсе
-            if total > 0:
-                messagebox.showinfo("Готово", f"Проверено {total} модов.\nРезультаты отображены во вкладках.")
     
     def show_details(self, tree):
         """Показывает детали выбранного мода."""
