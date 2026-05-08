@@ -1,0 +1,7 @@
+{
+    "item.mod_partial.sword": "Fire Sword",
+    "item.mod_partial.axe": "Fire Axe",
+    "block.mod_partial.stone": "Fire Stone",
+    "gui.mod_partial.menu": "Fire Menu",
+    "message.mod_partial.hello": "Hello!"
+}
