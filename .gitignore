@@ -1,1 +1,21 @@
-(check_localization.py is a source file, so no need to ignore it)
+```
+# Compiled Python files
+__pycache__/
+*.pyc
+
+# Test mod jars
+test_mods/
+
+# Logs and temp files
+*.log
+*.tmp
+
+# Environment
+.env
+.env.local
+*.env.*
+
+# Editors
+.vscode/
+.idea/
+```
