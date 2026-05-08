@@ -1,12 +1,13 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+from PyInstaller.utils.hooks import collect_submodules
 
 a = Analysis(
     ['check_localization.py'],
     pathex=[],
     binaries=[],
     datas=[],
-    hiddenimports=[],
+    hiddenimports=collect_submodules('tkinter'),
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
