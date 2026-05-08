@@ -135,8 +135,35 @@ def find_ru_ru_in_rtfe(mod_name: str) -> Optional[Path]:
     if RTFE_PATH.exists():
         for item in RTFE_PATH.iterdir():
             if item.is_dir():
-                # Проверяем, содержит ли название папки название мода
+                # Проверяем, содержит ли название папки название мода или наоборот
                 if mod_name.lower() in item.name.lower() or item.name.lower() in mod_name.lower():
+                    ru_ru_path = item / "lang" / "ru_ru.json"
+                    if ru_ru_path.exists():
+                        return ru_ru_path
+        
+        # Дополнительная проверка: если имя папки является аббревиатурой или префиксом
+        # Например, ali -> advancedlootinfo (a-l-i первые буквы слов)
+        import re
+        # Разбиваем mod_name на слова (по заглавным буквам или подчеркиваниям)
+        words = re.split(r'[_-]', mod_name.lower())
+        if len(words) == 1:
+            # Если одно слово, пробуем разбить по заглавным буквам
+            words = re.findall(r'[a-z]+', mod_name.lower())
+        
+        # Создаем аббревиатуру из первых букв слов
+        if len(words) > 1:
+            abbrev = ''.join([w[0] for w in words if w])
+            for item in RTFE_PATH.iterdir():
+                if item.is_dir() and item.name.lower() == abbrev:
+                    ru_ru_path = item / "lang" / "ru_ru.json"
+                    if ru_ru_path.exists():
+                        return ru_ru_path
+        
+        # Также проверяем, начинается ли mod_name с названия папки
+        for item in RTFE_PATH.iterdir():
+            if item.is_dir() and len(item.name) >= 2:
+                # Проверяем первые несколько букв
+                if mod_name.lower().startswith(item.name.lower()):
                     ru_ru_path = item / "lang" / "ru_ru.json"
                     if ru_ru_path.exists():
                         return ru_ru_path
@@ -324,13 +351,13 @@ def check_jar_localization(jar_path: Path) -> Dict[str, Any]:
     result = {
         "mod_name": jar_path.name,
         "status": "missing",  # full, partial, missing
+        "source": "none",  # "jar", "rtfe", "none"
         "ru_keys": 0,
         "en_keys": 0,
         "percentage": 0.0,
         "missing_keys": [],  # Ключи из en_us, которых нет в ru_ru
         "extra_keys": [],    # Ключи из ru_ru, которых нет в en_us (для обратной совместимости)
-        "error": None,
-        "rtfe_source": None  # Информация о переводе из RTFE
+        "error": None
     }
     
     # Находим пути к файлам внутри архива
@@ -356,6 +383,7 @@ def check_jar_localization(jar_path: Path) -> Dict[str, Any]:
         
         if ru_data is not None:
             # Есть встроенный перевод
+            result["source"] = "jar"
             en_keys_set = set(en_data.keys())
             ru_keys_set = set(ru_data.keys())
             
@@ -388,11 +416,11 @@ def check_jar_localization(jar_path: Path) -> Dict[str, Any]:
         rtfe_result = check_rtfe_localization(jar_path, en_data, en_us_path)
         
         if rtfe_result["found"]:
+            result["source"] = "rtfe"
             result["ru_keys"] = rtfe_result["ru_keys"]
             result["percentage"] = rtfe_result["percentage"]
             result["missing_keys"] = rtfe_result["missing_keys"]
             result["extra_keys"] = rtfe_result["extra_keys"]
-            result["rtfe_source"] = str(rtfe_result.get("source"))
             
             if rtfe_result["status"] == "full":
                 result["status"] = "full"
@@ -694,12 +722,10 @@ class LocalizationCheckerGUI:
         
         details = f"Мод: {mod_info['mod_name']}\n"
         details += f"Статус: {mod_info['status']}\n"
+        details += f"Источник: {mod_info.get('source', 'none')}\n"
         details += f"Ключей в RU: {mod_info['ru_keys']}\n"
         details += f"Ключей в EN: {mod_info['en_keys']}\n"
         details += f"Процент: {mod_info['percentage']}%\n\n"
-        
-        if mod_info.get("rtfe_source"):
-            details += f"📦 Перевод из RTFE: {mod_info['rtfe_source']}\n\n"
         
         if mod_info.get("missing_keys"):
             details += f"❌ Недостающие ключи ({len(mod_info['missing_keys'])}):\n"
