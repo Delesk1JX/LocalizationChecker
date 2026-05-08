@@ -6,7 +6,9 @@
 Категории:
 - Полный перевод: 100% совпадение ключей с en_us.json (все ключи из en_us есть в ru_ru)
 - Неполный перевод: есть ru_ru.json, но не все ключи из en_us присутствуют
-- Отсутствует: нет ru_ru.json
+- Отсутствует: есть en_us.json, но нет ru_ru.json
+
+Важно: Моды без файла en_us.json не учитываются при проверке.
 
 Лишние ключи в ru_ru.json (которых нет в en_us.json) сохраняются в отчете,
 так как могут использоваться для обратной совместимости.
@@ -110,13 +112,9 @@ def check_jar_localization(jar_path: Path) -> Dict[str, Any]:
     en_us_path, ru_ru_path = find_lang_files_in_jar(jar_path)
     
     if en_us_path is None:
-        result["error"] = "Файл en_us.json не найден в архиве"
-        if ru_ru_path is not None:
-            # Есть русский файл, но нет английского - считаем частичным
-            ru_data = extract_json_from_jar(jar_path, ru_ru_path)
-            if ru_data:
-                result["ru_keys"] = len(ru_data)
-                result["status"] = "partial"
+        # Если нет файла en_us.json, мод не учитывается
+        result["status"] = "skipped"
+        result["error"] = "Файл en_us.json не найден в архиве (мод пропущен)"
         return result
     
     if ru_ru_path is None:
@@ -208,8 +206,9 @@ def scan_jars_directory(base_path: Path, progress_callback=None) -> Dict[str, Li
                 results["full"].append(jar_result)
             elif jar_result["status"] == "partial":
                 results["partial"].append(jar_result)
-            else:
+            elif jar_result["status"] == "missing":
                 results["missing"].append(jar_result)
+            # Если статус "skipped", мод не учитывается
             
             if progress_callback:
                 progress_callback(i + 1, total)
