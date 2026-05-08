@@ -315,28 +315,32 @@ def extract_json_from_jar(jar_path: Path, lang_path: str) -> Optional[Dict[str, 
         return None
 
 
-def find_lang_files_in_jar(jar_path: Path) -> Tuple[Optional[str], Optional[str]]:
+def find_lang_files_in_jar(jar_path: Path) -> Tuple[Optional[str], Optional[str], bool]:
     """
     Ищет файлы en_us.json и ru_ru.json внутри .jar файла.
     
     Returns:
-        Tuple[путь_к_en_us, путь_к_ru_ru] внутри архива (или None если не найдены)
+        Tuple[путь_к_en_us, путь_к_ru_ru, есть ли папка lang] внутри архива
     """
     en_us_path = None
     ru_ru_path = None
+    has_lang_dir = False
     
     try:
         with zipfile.ZipFile(jar_path, 'r') as jar_file:
             for name in jar_file.namelist():
+                normalized = name.replace('\\', '/').lower()
+                if '/lang/' in normalized:
+                    has_lang_dir = True
                 # Ищем файлы локализации в папках lang
-                if name.endswith('/lang/en_us.json') or name.endswith('\\lang\\en_us.json'):
+                if normalized.endswith('/lang/en_us.json'):
                     en_us_path = name
-                elif name.endswith('/lang/ru_ru.json') or name.endswith('\\lang\\ru_ru.json'):
+                elif normalized.endswith('/lang/ru_ru.json'):
                     ru_ru_path = name
     except zipfile.BadZipFile:
-        return (None, None)
+        return (None, None, False)
     
-    return (en_us_path, ru_ru_path)
+    return (en_us_path, ru_ru_path, has_lang_dir)
 
 
 def check_jar_localization(jar_path: Path) -> Dict[str, Any]:
@@ -361,7 +365,13 @@ def check_jar_localization(jar_path: Path) -> Dict[str, Any]:
     }
     
     # Находим пути к файлам внутри архива
-    en_us_path, ru_ru_path = find_lang_files_in_jar(jar_path)
+    en_us_path, ru_ru_path, has_lang_dir = find_lang_files_in_jar(jar_path)
+    
+    if not has_lang_dir:
+        # Если в архиве нет папки lang, мод пропускаем и не включаем в отсутствующие
+        result["status"] = "skipped"
+        result["error"] = "Папка lang не найдена в архиве (мод пропущен)"
+        return result
     
     if en_us_path is None:
         # Если нет файла en_us.json, мод не учитывается
