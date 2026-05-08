@@ -272,17 +272,17 @@ class LocalizationCheckerGUI:
         
         # Вкладка "Полный перевод"
         self.full_frame = ttk.Frame(self.notebook)
-        self.notebook.add(self.full_frame, text="🟢 Полный (100%)")
+        self.notebook.add(self.full_frame, text="[100%] Полный")
         self.full_tree = self.create_treeview(self.full_frame, ["Мод", "Ключи RU", "Ключи EN", "%"])
         
         # Вкладка "Неполный перевод"
         self.partial_frame = ttk.Frame(self.notebook)
-        self.notebook.add(self.partial_frame, text="🟡 Неполный")
+        self.notebook.add(self.partial_frame, text="[Частично] Неполный")
         self.partial_tree = self.create_treeview(self.partial_frame, ["Мод", "Ключи RU", "Ключи EN", "%", "Не хватает"])
         
         # Вкладка "Отсутствует"
         self.missing_frame = ttk.Frame(self.notebook)
-        self.notebook.add(self.missing_frame, text="🔴 Отсутствует")
+        self.notebook.add(self.missing_frame, text="[Нет] Отсутствует")
         self.missing_tree = self.create_treeview(self.missing_frame, ["Мод", "Ключи EN", "Причина"])
         
         # Статус бар
@@ -396,7 +396,7 @@ class LocalizationCheckerGUI:
         # Обновляем статус
         total = len(self.results["full"]) + len(self.results["partial"]) + len(self.results["missing"])
         self.status_label.config(
-            text=f"Всего: {total} | 🟢 {len(self.results['full'])} | 🟡 {len(self.results['partial'])} | 🔴 {len(self.results['missing'])}",
+            text=f"Всего: {total} | [100%]: {len(self.results['full'])} | [Частично]: {len(self.results['partial'])} | [Нет]: {len(self.results['missing'])}",
             foreground="green"
         )
     
@@ -568,11 +568,11 @@ def main_cli():
     
     # Вывод статистики
     print("\n" + "=" * 60)
-    print("📈 СТАТИСТИКА:")
+    print("СТАТИСТИКА:")
     print(f"   Всего модов проверено: {total_mods}")
-    print(f"   🟢 С полным переводом: {len(results['full'])}")
-    print(f"   🟡 С неполным переводом: {len(results['partial'])}")
-    print(f"   🔴 Без русского языка: {len(results['missing'])}")
+    print(f"   [100%] С полным переводом: {len(results['full'])}")
+    print(f"   [Частично] С неполным переводом: {len(results['partial'])}")
+    print(f"   [Нет] Без русского языка: {len(results['missing'])}")
     print("=" * 60)
     
     # Сохранение результатов в JSON
