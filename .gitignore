@@ -1,1 +1,1 @@
-Nothing should be ignored based on the provided file changes. The changes only involve JSON language files (.json), which are source/config files and should not be added to .gitignore according to the rules.
+__pycache__/
