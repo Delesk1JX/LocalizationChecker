@@ -1,0 +1,64 @@
+{
+  "scan_directory": "/workspace/test_mods",
+  "total_mods": 4,
+  "summary": {
+    "full_translation": 2,
+    "partial_translation": 1,
+    "missing_translation": 1
+  },
+  "mods": {
+    "full": [
+      {
+        "mod_name": "testmod1-full.jar",
+        "status": "full",
+        "ru_keys": 4,
+        "en_keys": 4,
+        "percentage": 100.0,
+        "missing_keys": [],
+        "extra_keys": [],
+        "error": null,
+        "rtfe_source": null
+      },
+      {
+        "mod_name": "testmod2-missing.jar",
+        "status": "full",
+        "ru_keys": 4,
+        "en_keys": 4,
+        "percentage": 100.0,
+        "missing_keys": [],
+        "extra_keys": [],
+        "error": null,
+        "rtfe_source": "rtfe"
+      }
+    ],
+    "partial": [
+      {
+        "mod_name": "testmod3-partial.jar",
+        "status": "partial",
+        "ru_keys": 2,
+        "en_keys": 4,
+        "percentage": 50.0,
+        "missing_keys": [
+          "key3",
+          "key4"
+        ],
+        "extra_keys": [],
+        "error": null,
+        "rtfe_source": "rtfe"
+      }
+    ],
+    "missing": [
+      {
+        "mod_name": "testmod4-notranslate.jar",
+        "status": "missing",
+        "ru_keys": 0,
+        "en_keys": 4,
+        "percentage": 0.0,
+        "missing_keys": [],
+        "extra_keys": [],
+        "error": null,
+        "rtfe_source": null
+      }
+    ]
+  }
+}

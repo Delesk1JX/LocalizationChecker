@@ -109,7 +109,7 @@ def find_ru_ru_in_rtfe(mod_name: str) -> Optional[Path]:
     │       └── ru_ru.json
     
     Args:
-        mod_name: Название мода (без расширения .jar)
+        mod_name: Название мода (извлеченное из assets внутри .jar файла)
         
     Returns:
         Путь к файлу ru_ru.json или None если не найден
@@ -117,11 +117,8 @@ def find_ru_ru_in_rtfe(mod_name: str) -> Optional[Path]:
     if RTFE_PATH is None:
         return None
     
-    # Извлекаем имя мода без расширения .jar и префиксов
-    clean_mod_name = mod_name.replace('.jar', '').replace('.zip', '')
-    
-    # Также пробуем варианты без префиксов модов (например, без "forge-" и т.д.)
-    possible_names = [clean_mod_name]
+    # mod_name уже является чистым именем мода из assets
+    possible_names = [mod_name]
     
     # Пробуем найти папку мода в RTFE
     for name in possible_names:
@@ -136,10 +133,42 @@ def find_ru_ru_in_rtfe(mod_name: str) -> Optional[Path]:
         for item in RTFE_PATH.iterdir():
             if item.is_dir():
                 # Проверяем, содержит ли название папки название мода
-                if clean_mod_name.lower() in item.name.lower() or item.name.lower() in clean_mod_name.lower():
+                if mod_name.lower() in item.name.lower() or item.name.lower() in mod_name.lower():
                     ru_ru_path = item / "lang" / "ru_ru.json"
                     if ru_ru_path.exists():
                         return ru_ru_path
+    
+    return None
+
+
+def extract_mod_name_from_assets(jar_path: Path) -> Optional[str]:
+    """
+    Извлекает имя мода из структуры папок assets внутри .jar файла.
+    
+    Например, если внутри .jar есть путь 'assets/advancedlootinfo/lang/en_us.json',
+    то имя мода будет 'advancedlootinfo'.
+    
+    Args:
+        jar_path: Путь к .jar файлу
+        
+    Returns:
+        Имя мода или None если не удалось извлечь
+    """
+    try:
+        with zipfile.ZipFile(jar_path, 'r') as jar_file:
+            for name in jar_file.namelist():
+                # Ищем файлы в папке assets/<modname>/lang/
+                if '/lang/' in name or '\\\\lang\\\\' in name:
+                    # Извлекаем путь до lang
+                    parts = name.replace('\\\\', '/').split('/')
+                    # Находим индекс 'assets' и берем следующий элемент
+                    for i, part in enumerate(parts):
+                        if part == 'assets' and i + 1 < len(parts):
+                            mod_name = parts[i + 1]
+                            if mod_name and mod_name != 'lang':
+                                return mod_name
+    except zipfile.BadZipFile:
+        return None
     
     return None
 
@@ -171,8 +200,15 @@ def check_rtfe_localization(jar_path: Path, en_data: Dict[str, str], en_us_path:
     if RTFE_PATH is None:
         return result
     
-    # Ищем ru_ru.json в RTFE
-    ru_ru_path = find_ru_ru_in_rtfe(jar_path.name)
+    # Извлекаем имя мода из assets внутри .jar файла
+    mod_name = extract_mod_name_from_assets(jar_path)
+    
+    if mod_name is None:
+        result["error"] = "Не удалось извлечь имя мода из assets"
+        return result
+    
+    # Ищем ru_ru.json в RTFE используя имя мода из assets
+    ru_ru_path = find_ru_ru_in_rtfe(mod_name)
     
     if ru_ru_path is None:
         return result
