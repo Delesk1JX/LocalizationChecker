@@ -50,7 +50,7 @@ def get_rtfe_path() -> Optional[Path]:
 
 def find_rtfe_directory(base_path: Path) -> Optional[Path]:
     """
-    Ищет папку RTFE рядом с указанной директорией или в ней.
+    Ищет папку RTFE рядом с указанной директорией, в ней или внутри HelperTranslatorRU.
     
     Args:
         base_path: Базовая директория для поиска
@@ -63,6 +63,9 @@ def find_rtfe_directory(base_path: Path) -> Optional[Path]:
         base_path / "RTFE",
         base_path.parent / "RTFE",
         Path.cwd() / "RTFE",
+        base_path / "HelperTranslatorRU" / "RTFE",
+        base_path.parent / "HelperTranslatorRU" / "RTFE",
+        Path.cwd() / "HelperTranslatorRU" / "RTFE",
     ]
     
     for path in possible_paths:
