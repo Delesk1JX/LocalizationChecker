@@ -1,5 +1,5 @@
 {
-  "rtfe_path": "TranslatedMods",
+  "translated_mods_path": "TranslatedMods",
   "supported_languages": ["ru_ru"],
   "max_workers": 4,
   "show_statistics": true,
