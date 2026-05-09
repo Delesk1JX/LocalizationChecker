@@ -2,7 +2,7 @@
 """
 Программа для проверки русской локализации в модах Minecraft.
 Работает напрямую с .jar файлами, проверяет наличие ru_ru.json и сравнивает ключи с en_us.json.
-Также поддерживает проверку переводов в ресурспаке RTF:E (папка RTFE).
+Также поддерживает проверку переводов в ресурспаке RTF:E (папка TranslatedMods).
 
 Категории:
 - Полный перевод: 100% совпадение ключей с en_us.json (все ключи из en_us есть в ru_ru)
@@ -73,7 +73,7 @@ def load_config(config_file: str = "config.json") -> Dict[str, Any]:
     
     # Значения по умолчанию
     CONFIG = {
-        "rtfe_path": "RTFE",
+        "rtfe_path": "TranslatedMods",
         "supported_languages": ["ru_ru"],
         "max_workers": 4,
         "show_statistics": True,
@@ -83,34 +83,34 @@ def load_config(config_file: str = "config.json") -> Dict[str, Any]:
 
 
 def set_rtfe_path(path: Optional[Path]):
-    """Устанавливает путь к папке RTFE."""
+    """Устанавливает путь к папке TranslatedMods."""
     global RTFE_PATH
     RTFE_PATH = path
 
 
 def get_rtfe_path() -> Optional[Path]:
-    """Возвращает текущий путь к папке RTFE."""
+    """Возвращает текущий путь к папке TranslatedMods."""
     return RTFE_PATH
 
 
 def find_rtfe_directory(base_path: Path) -> Optional[Path]:
     """
-    Ищет папку RTFE рядом с указанной директорией, в ней или внутри HelperTranslatorRU.
+    Ищет папку TranslatedMods рядом с указанной директорией, в ней или внутри HelperTranslatorRU.
     
     Args:
         base_path: Базовая директория для поиска
         
     Returns:
-        Путь к папке RTFE или None если не найдена
+        Путь к папке TranslatedMods или None если не найдена
     """
-    # Проверяем несколько возможных мест расположения RTFE
+    # Проверяем несколько возможных мест расположения TranslatedMods
     possible_paths = [
-        base_path / "RTFE",
-        base_path.parent / "RTFE",
-        Path.cwd() / "RTFE",
-        base_path / "HelperTranslatorRU" / "RTFE",
-        base_path.parent / "HelperTranslatorRU" / "RTFE",
-        Path.cwd() / "HelperTranslatorRU" / "RTFE",
+        base_path / "TranslatedMods",
+        base_path.parent / "TranslatedMods",
+        Path.cwd() / "TranslatedMods",
+        base_path / "HelperTranslatorRU" / "TranslatedMods",
+        base_path.parent / "HelperTranslatorRU" / "TranslatedMods",
+        Path.cwd() / "HelperTranslatorRU" / "TranslatedMods",
     ]
     
     for path in possible_paths:
@@ -148,10 +148,10 @@ def extract_json_from_file(file_path: Path) -> Optional[Dict[str, str]]:
 
 def find_ru_ru_in_rtfe(mod_name: str) -> Optional[Path]:
     """
-    Ищет файл ru_ru.json для мода в папке RTFE.
+    Ищет файл ru_ru.json для мода в папке TranslatedMods.
     
-    Структура RTFE:
-    RTFE/
+    Структура TranslatedMods:
+    TranslatedMods/
     ├── <название_мода>/
     │   └── lang/
     │       └── ru_ru.json
@@ -168,7 +168,7 @@ def find_ru_ru_in_rtfe(mod_name: str) -> Optional[Path]:
     # mod_name уже является чистым именем мода из assets
     possible_names = [mod_name]
     
-    # Пробуем найти папку мода в RTFE
+    # Пробуем найти папку мода в TranslatedMods
     for name in possible_names:
         mod_dir = RTFE_PATH / name
         if mod_dir.exists() and mod_dir.is_dir():
@@ -250,7 +250,7 @@ def extract_mod_name_from_assets(jar_path: Path) -> Optional[str]:
 
 def check_rtfe_localization(jar_path: Path, en_data: Dict[str, str], en_us_path: str) -> Dict[str, Any]:
     """
-    Проверяет наличие перевода для мода в папке RTFE.
+    Проверяет наличие перевода для мода в папке TranslatedMods.
     
     Args:
         jar_path: Путь к .jar файлу мода
@@ -258,7 +258,7 @@ def check_rtfe_localization(jar_path: Path, en_data: Dict[str, str], en_us_path:
         en_us_path: Путь к en_us.json внутри архива
         
     Returns:
-        Словарь с результатами проверки или None если RTFE не настроен
+        Словарь с результатами проверки или None если TranslatedMods не настроен
     """
     result = {
         "found": False,
@@ -282,7 +282,7 @@ def check_rtfe_localization(jar_path: Path, en_data: Dict[str, str], en_us_path:
         result["error"] = "Не удалось извлечь имя мода из assets"
         return result
     
-    # Ищем ru_ru.json в RTFE используя имя мода из assets
+    # Ищем ru_ru.json в TranslatedMods используя имя мода из assets
     ru_ru_path = find_ru_ru_in_rtfe(mod_name)
     
     if ru_ru_path is None:
@@ -400,7 +400,7 @@ def check_jar_localization(jar_path: Path) -> Dict[str, Any]:
     """
     Проверяет локализацию в одном .jar файле.
     Сначала проверяет наличие ru_ru.json внутри .jar файла.
-    Если не найден, проверяет наличие перевода в папке RTFE.
+    Если не найден, проверяет наличие перевода в папке TranslatedMods.
     
     Returns:
         Словарь с результатами проверки
@@ -480,7 +480,7 @@ def check_jar_localization(jar_path: Path) -> Dict[str, Any]:
             
             return result
     
-    # Если встроенного перевода нет, проверяем RTFE
+    # Если встроенного перевода нет, проверяем TranslatedMods
     if RTFE_PATH is not None:
         rtfe_result = check_rtfe_localization(jar_path, en_data, en_us_path)
         
@@ -500,7 +500,7 @@ def check_jar_localization(jar_path: Path) -> Dict[str, Any]:
             
             return result
     
-    # Перевода нет ни в .jar, ни в RTFE
+    # Перевода нет ни в .jar, ни в TranslatedMods
     result["status"] = "missing"
     return result
 
@@ -574,6 +574,13 @@ class LocalizationCheckerGUI:
         
         self.current_path = None
         self.results = None
+        
+        # Отслеживание сортировки для каждой таблицы
+        self.sort_state = {
+            "full": {"column": None, "reverse": False},
+            "partial": {"column": None, "reverse": False},
+            "missing": {"column": None, "reverse": False}
+        }
         
         self.setup_ui()
     
@@ -666,7 +673,7 @@ class LocalizationCheckerGUI:
         tree = ttk.Treeview(parent, columns=columns, show="headings", selectmode="browse")
         
         for col in columns:
-            tree.heading(col, text=col)
+            tree.heading(col, text=col, command=lambda c=col, t=tree: self.on_column_click(c, t))
             tree.column(col, width=100 if col != "Мод" else 300)
         
         # Добавляем полосу прокрутки
@@ -681,6 +688,66 @@ class LocalizationCheckerGUI:
         
         return tree
     
+    def get_tree_category(self, tree):
+        """Определяет категорию дерева по объекту."""
+        if tree == self.full_tree:
+            return "full"
+        elif tree == self.partial_tree:
+            return "partial"
+        elif tree == self.missing_tree:
+            return "missing"
+        return None
+    
+    def on_column_click(self, column, tree):
+        """Обработчик клика на заголовок колонки для сортировки."""
+        category = self.get_tree_category(tree)
+        if category is None or not self.results:
+            return
+        
+        # Определяем, нужно ли переворачивать порядок
+        if self.sort_state[category]["column"] == column:
+            # Если кликнули на ту же колонку, переворачиваем порядок
+            self.sort_state[category]["reverse"] = not self.sort_state[category]["reverse"]
+        else:
+            # Если кликнули на новую колонку, начинаем с прямого порядка
+            self.sort_state[category]["column"] = column
+            self.sort_state[category]["reverse"] = False
+        
+        # Пересортируем и отобразим результаты
+        self.apply_filter()
+    
+    def sort_results(self, mods_list, column_name, reverse=False):
+        """Сортирует список модов по указанной колонке."""
+        if not mods_list:
+            return mods_list
+        
+        # Функции для определения значения сортировки
+        if column_name == "Мод":
+            # Сортировка по имени мода
+            return sorted(mods_list, key=lambda x: x["mod_name"].lower(), reverse=reverse)
+        
+        elif column_name == "Ключи RU":
+            # Сортировка по количеству RU ключей
+            return sorted(mods_list, key=lambda x: x["ru_keys"], reverse=reverse)
+        
+        elif column_name == "Ключи EN":
+            # Сортировка по количеству EN ключей
+            return sorted(mods_list, key=lambda x: x["en_keys"], reverse=reverse)
+        
+        elif column_name == "%":
+            # Сортировка по проценту перевода
+            return sorted(mods_list, key=lambda x: x["percentage"], reverse=reverse)
+        
+        elif column_name == "Не хватает":
+            # Сортировка по количеству недостающих ключей
+            return sorted(mods_list, key=lambda x: len(x.get("missing_keys", [])), reverse=reverse)
+        
+        elif column_name == "Причина":
+            # Сортировка по причине (для вкладки "Отсутствует")
+            return sorted(mods_list, key=lambda x: x.get("error", ""), reverse=reverse)
+        
+        return mods_list
+    
     def select_directory(self):
         """Открывает диалог выбора директории."""
         directory = filedialog.askdirectory(title="Выберите папку с .jar файлами модов")
@@ -690,17 +757,17 @@ class LocalizationCheckerGUI:
             self.check_btn.config(state=tk.NORMAL)
             self.status_label.config(text=f"Папка выбрана: {self.current_path}", foreground="black")
             
-            # Автоматически ищем папку RTFE
+            # Автоматически ищем папку TranslatedMods
             rtfe_path = find_rtfe_directory(self.current_path)
             if rtfe_path:
                 set_rtfe_path(rtfe_path)
                 self.status_label.config(
-                    text=f"Папка выбрана: {self.current_path} | RTFE найден: {rtfe_path}", 
+                    text=f"Папка выбрана: {self.current_path} | TranslatedMods найден: {rtfe_path}", 
                     foreground="blue"
                 )
             else:
                 self.status_label.config(
-                    text=f"Папка выбрана: {self.current_path} | RTFE не найден", 
+                    text=f"Папка выбрана: {self.current_path} | TranslatedMods не найден", 
                     foreground="orange"
                 )
     
@@ -756,6 +823,9 @@ class LocalizationCheckerGUI:
             text=f"Всего: {total} | [100%]: {len(self.results['full'])} | [Частично]: {len(self.results['partial'])} | [Нет]: {len(self.results['missing'])}",
             foreground="green"
         )
+        
+        # Показываем сообщение о завершении
+        messagebox.showinfo("Готово", f"Проверено {total} модов (только с файлами локализации).\nРезультаты отображены во вкладках.\n\n💡 Подсказка: Нажимайте на заголовки столбцов для сортировки!")
     
     def check_complete(self):
         """Завершение проверки."""
@@ -763,19 +833,13 @@ class LocalizationCheckerGUI:
         self.select_btn.config(state=tk.NORMAL)
         self.export_btn.config(state=tk.NORMAL)
         self.progress_label.config(text="Проверка завершена")
-        
-        # Показываем окно только после завершения проверки пользователем
-        if self.results:
-            total = len(self.results["full"]) + len(self.results["partial"]) + len(self.results["missing"])
-            if total > 0:
-                messagebox.showinfo("Готово", f"Проверено {total} модов.\nРезультаты отображены во вкладках.")
     
     def on_search_change(self, *args):
         """Обработчик изменения текста поиска."""
         self.apply_filter()
     
     def apply_filter(self):
-        """Применяет фильтр поиска к таблицам."""
+        """Применяет фильтр поиска и сортировку к таблицам."""
         search_text = self.search_var.get().lower()
         filter_type = self.filter_var.get()
         
@@ -792,36 +856,54 @@ class LocalizationCheckerGUI:
         
         # Показываем результаты в зависимости от фильтра
         if filter_type in ("all", "Полный"):
-            for mod in self.results["full"]:
-                if search_text in mod["mod_name"].lower():
-                    self.full_tree.insert("", tk.END, values=(
-                        mod["mod_name"],
-                        mod["ru_keys"],
-                        mod["en_keys"],
-                        f"{mod['percentage']}%"
-                    ))
+            # Фильтруем по поисковому тексту
+            full_filtered = [mod for mod in self.results["full"] 
+                           if search_text in mod["mod_name"].lower()]
+            # Применяем сортировку
+            sort_col = self.sort_state["full"]["column"] or "Мод"
+            full_sorted = self.sort_results(full_filtered, sort_col, self.sort_state["full"]["reverse"])
+            
+            for mod in full_sorted:
+                self.full_tree.insert("", tk.END, values=(
+                    mod["mod_name"],
+                    mod["ru_keys"],
+                    mod["en_keys"],
+                    f"{mod['percentage']}%"
+                ))
         
         if filter_type in ("all", "Неполный"):
-            for mod in self.results["partial"]:
-                if search_text in mod["mod_name"].lower():
-                    missing_count = len(mod["missing_keys"])
-                    self.partial_tree.insert("", tk.END, values=(
-                        mod["mod_name"],
-                        mod["ru_keys"],
-                        mod["en_keys"],
-                        f"{mod['percentage']}%",
-                        f"{missing_count} ключей"
-                    ))
+            # Фильтруем по поисковому тексту
+            partial_filtered = [mod for mod in self.results["partial"]
+                              if search_text in mod["mod_name"].lower()]
+            # Применяем сортировку
+            sort_col = self.sort_state["partial"]["column"] or "Мод"
+            partial_sorted = self.sort_results(partial_filtered, sort_col, self.sort_state["partial"]["reverse"])
+            
+            for mod in partial_sorted:
+                missing_count = len(mod["missing_keys"])
+                self.partial_tree.insert("", tk.END, values=(
+                    mod["mod_name"],
+                    mod["ru_keys"],
+                    mod["en_keys"],
+                    f"{mod['percentage']}%",
+                    f"{missing_count} ключей"
+                ))
         
         if filter_type in ("all", "Отсутствует"):
-            for mod in self.results["missing"]:
-                if search_text in mod["mod_name"].lower():
-                    reason = mod.get("error", "Нет ru_ru.json")
-                    self.missing_tree.insert("", tk.END, values=(
-                        mod["mod_name"],
-                        mod["en_keys"],
-                        reason
-                    ))
+            # Фильтруем по поисковому тексту
+            missing_filtered = [mod for mod in self.results["missing"]
+                              if search_text in mod["mod_name"].lower()]
+            # Применяем сортировку
+            sort_col = self.sort_state["missing"]["column"] or "Мод"
+            missing_sorted = self.sort_results(missing_filtered, sort_col, self.sort_state["missing"]["reverse"])
+            
+            for mod in missing_sorted:
+                reason = mod.get("error", "Нет ru_ru.json")
+                self.missing_tree.insert("", tk.END, values=(
+                    mod["mod_name"],
+                    mod["en_keys"],
+                    reason
+                ))
     
     def show_details(self, tree):
         """Показывает детали выбранного мода."""
@@ -962,7 +1044,7 @@ def main_cli():
         "--rtfe",
         type=str,
         default=None,
-        help="Путь к папке RTFE с переводами (необязательно)"
+        help="Путь к папке TranslatedMods с переводами (необязательно)"
     )
     
     args = parser.parse_args()
@@ -977,21 +1059,21 @@ def main_cli():
         print(f"❌ Ошибка: Директория '{base_path}' не существует")
         return 1
     
-    # Ищем и устанавливаем путь к RTFE
+    # Ищем и устанавливаем путь к TranslatedMods
     rtfe_path = None
     if args.rtfe:
         rtfe_path = Path(args.rtfe)
         if not rtfe_path.exists():
-            print(f"⚠️  Предупреждение: Указанная папка RTFE не существует: {rtfe_path}")
+            print(f"⚠️  Предупреждение: Указанная папка TranslatedMods не существует: {rtfe_path}")
             rtfe_path = None
     else:
         rtfe_path = find_rtfe_directory(base_path)
     
     if rtfe_path:
         set_rtfe_path(rtfe_path)
-        print(f"📦 RTFE найден: {rtfe_path}")
+        print(f"📦 TranslatedMods найден: {rtfe_path}")
     else:
-        print("📦 RTFE не найден (проверка только встроенных переводов)")
+        print("📦 TranslatedMods не найден (проверка только встроенных переводов)")
     
     print(f"🔍 Сканирование директории: {base_path}")
     print("-" * 60)
