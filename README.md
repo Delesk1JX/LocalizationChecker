@@ -174,7 +174,7 @@ python check_localization.py /path/to/mods -o report.json
 
 ## Для создания использовался Qwen Coder
 
-##Discord: narik_20
+## Discord: narik_20
 
 ## 📝 Лицензия
 
