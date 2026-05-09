@@ -363,7 +363,7 @@ def extract_json_from_jar(jar_path: Path, lang_path: str) -> Optional[Dict[str, 
 def find_lang_files_in_jar(jar_path: Path) -> Tuple[Optional[str], Optional[str], bool]:
     """
     Ищет файлы en_us.json и ru_ru.json внутри .jar файла.
-    Оптимизирована: ранний выход при отсутствии /lang/, завершает поиск после нахождения en_us.
+    Проходит по всем файлам архива для обнаружения обоих языковых файлов.
     
     Returns:
         Tuple[путь_к_en_us, путь_к_ru_ru, есть ли папка lang] внутри архива
@@ -386,10 +386,11 @@ def find_lang_files_in_jar(jar_path: Path) -> Tuple[Optional[str], Optional[str]
                 # Ищем файлы локализации
                 if normalized.endswith('/lang/en_us.json'):
                     en_us_path = name
-                    # Прерываем цикл, если нашли en_us (он обязателен)
-                    break
                 elif normalized.endswith('/lang/ru_ru.json'):
                     ru_ru_path = name
+
+                # Продолжаем поиск, даже если нашли один из файлов,
+                # чтобы обнаружить оба (и en_us, и ru_ru)
     except zipfile.BadZipFile:
         return (None, None, False)
     
