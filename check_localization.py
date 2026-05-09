@@ -2,7 +2,7 @@
 """
 Программа для проверки русской локализации в модах Minecraft.
 Работает напрямую с .jar файлами, проверяет наличие ru_ru.json и сравнивает ключи с en_us.json.
-Также поддерживает проверку переводов в ресурспаке RTF:E (папка TranslatedMods).
+Также поддерживает проверку переводов в папке TranslatedMods.
 
 Категории:
 - Полный перевод: 100% совпадение ключей с en_us.json (все ключи из en_us есть в ru_ru)
@@ -709,9 +709,11 @@ class LocalizationCheckerGUI:
             # Если кликнули на ту же колонку, переворачиваем порядок
             self.sort_state[category]["reverse"] = not self.sort_state[category]["reverse"]
         else:
-            # Если кликнули на новую колонку, начинаем с прямого порядка
+            # Если кликнули на новую колонку, выбираем подходящее направление сортировки
             self.sort_state[category]["column"] = column
-            self.sort_state[category]["reverse"] = False
+            # Числовые колонки сортируются по убыванию (большие значения первыми)
+            numeric_columns = ["%", "Ключи RU", "Ключи EN", "Не хватает"]
+            self.sort_state[category]["reverse"] = column in numeric_columns
         
         # Пересортируем и отобразим результаты
         self.apply_filter()
