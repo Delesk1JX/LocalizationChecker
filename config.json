@@ -3,5 +3,10 @@
   "supported_languages": ["ru_ru"],
   "max_workers": 4,
   "show_statistics": true,
-  "default_export_file": "localization_results.json"
+  "default_export_file": "localization_results.json",
+  "row_colors": {
+    "jar": "#d4f4dd",
+    "translated_mods": "#d1e7ff",
+    "missing": "#ffe4e1"
+  }
 }
