@@ -2,7 +2,7 @@
 """
 Программа для проверки русской локализации в модах Minecraft.
 Работает напрямую с .jar файлами, проверяет наличие ru_ru.json и сравнивает ключи с en_us.json.
-Также поддерживает проверку переводов в ресурспаке RTF:E (папка TranslatedMods).
+Также поддерживает проверку переводов в папке TranslatedMods.
 
 Категории:
 - Полный перевод: 100% совпадение ключей с en_us.json (все ключи из en_us есть в ru_ru)
@@ -67,6 +67,7 @@ def load_config(config_file: str = "config.json") -> Dict[str, Any]:
                         if path.exists() and path.is_dir():
                             set_translated_mods_path(path)
                             break
+                # Гарантируем наличие секции row_colors
                 CONFIG.setdefault("row_colors", {
                     "jar": "#d4f4dd",
                     "translated_mods": "#d1e7ff",
@@ -756,7 +757,7 @@ class LocalizationCheckerGUI:
         self.root.clipboard_append(mod_name)
         self.show_temporary_status(f"Скопировано: {mod_name}", color="blue")
         return "break"
-
+    
     def on_column_click(self, column, tree):
         """Обработчик клика на заголовок колонки для сортировки."""
         category = self.get_tree_category(tree)
@@ -768,9 +769,11 @@ class LocalizationCheckerGUI:
             # Если кликнули на ту же колонку, переворачиваем порядок
             self.sort_state[category]["reverse"] = not self.sort_state[category]["reverse"]
         else:
-            # Если кликнули на новую колонку, начинаем с прямого порядка
+            # Если кликнули на новую колонку, выбираем подходящее направление сортировки
             self.sort_state[category]["column"] = column
-            self.sort_state[category]["reverse"] = False
+            # Числовые колонки сортируются по убыванию (большие значения первыми)
+            numeric_columns = ["%", "Ключи RU", "Ключи EN", "Не хватает"]
+            self.sort_state[category]["reverse"] = column in numeric_columns
         
         # Пересортируем и отобразим результаты
         self.apply_filter()
@@ -820,9 +823,9 @@ class LocalizationCheckerGUI:
             translated_mods_path = find_translated_mods_directory(self.current_path)
             if translated_mods_path:
                 set_translated_mods_path(translated_mods_path)
-                self.status_label.config(
-                    text=f"Папка выбрана: {self.current_path} | TranslatedMods найден: {translated_mods_path}", 
-                    foreground="blue"
+                self.set_status_message(
+                    f"Папка выбрана: {self.current_path} | TranslatedMods найден: {translated_mods_path}", 
+                    color="blue"
                 )
             else:
                 self.set_status_message(
@@ -1103,7 +1106,6 @@ def main_cli():
         "--translated_mods",
         "--rtfe",
         dest="translated_mods",
-        type=str,
         default=None,
         help="Путь к папке TranslatedMods с переводами (необязательно)"
     )
