@@ -1102,8 +1102,9 @@ def main_cli():
     )
     
     parser.add_argument(
+        "--translated_mods",
         "--rtfe",
-        type=str,
+        dest="translated_mods",
         default=None,
         help="Путь к папке TranslatedMods с переводами (необязательно)"
     )

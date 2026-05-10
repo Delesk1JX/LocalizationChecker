@@ -67,6 +67,11 @@ def load_config(config_file: str = "config.json") -> Dict[str, Any]:
                         if path.exists() and path.is_dir():
                             set_rtfe_path(path)
                             break
+                CONFIG.setdefault("row_colors", {
+                    "jar": "#d4f4dd",
+                    "translated_mods": "#d1e7ff",
+                    "missing": "#ffe4e1"
+                })
                 return CONFIG
     except Exception as e:
         print(f"⚠️  Ошибка загрузки конфига: {e}")
@@ -77,7 +82,12 @@ def load_config(config_file: str = "config.json") -> Dict[str, Any]:
         "supported_languages": ["ru_ru"],
         "max_workers": 4,
         "show_statistics": True,
-        "default_export_file": "localization_results.json"
+        "default_export_file": "localization_results.json",
+        "row_colors": {
+            "jar": "#d4f4dd",
+            "translated_mods": "#d1e7ff",
+            "missing": "#ffe4e1"
+        }
     }
     return CONFIG
 
@@ -574,6 +584,8 @@ class LocalizationCheckerGUI:
         
         self.current_path = None
         self.results = None
+        self.status_message = ""
+        self.status_color = "gray"
         
         # Отслеживание сортировки для каждой таблицы
         self.sort_state = {
@@ -683,8 +695,10 @@ class LocalizationCheckerGUI:
         tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         
-        # Обработка двойного клика для показа деталей
+        self.setup_tree_tags(tree)
         tree.bind("<Double-1>", lambda e: self.show_details(tree))
+        tree.bind("<Control-c>", lambda e, t=tree: self.copy_selected_mod_name(t))
+        tree.bind("<Control-C>", lambda e, t=tree: self.copy_selected_mod_name(t))
         
         return tree
     
@@ -697,7 +711,51 @@ class LocalizationCheckerGUI:
         elif tree == self.missing_tree:
             return "missing"
         return None
-    
+
+    def get_source_tag(self, source: str) -> str:
+        """Возвращает тег строки для указанного источника перевода."""
+        if source == "jar":
+            return "source_jar"
+        if source == "translated_mods":
+            return "source_translated_mods"
+        return "source_missing"
+
+    def set_status_message(self, message: str, color: str = "black", persist: bool = True):
+        """Обновляет текст статуса и сохраняет его, если это нужно."""
+        self.status_label.config(text=message, foreground=color)
+        if persist:
+            self.status_message = message
+            self.status_color = color
+
+    def show_temporary_status(self, message: str, color: str = "blue", timeout: int = 2000):
+        """Показывает временное сообщение в статусной строке."""
+        self.status_label.config(text=message, foreground=color)
+        self.root.after(timeout, lambda: self.set_status_message(self.status_message, self.status_color, True))
+
+    def setup_tree_tags(self, tree):
+        """Создает теги для раскрашивания строк по источнику перевода."""
+        colors = CONFIG.get("row_colors", {})
+        tree.tag_configure("source_jar", background=colors.get("jar", "#d4f4dd"))
+        tree.tag_configure("source_translated_mods", background=colors.get("translated_mods", "#d1e7ff"))
+        tree.tag_configure("source_missing", background=colors.get("missing", "#ffe4e1"))
+
+    def copy_selected_mod_name(self, tree):
+        """Копирует название мода из выделенной строки в буфер обмена."""
+        selection = tree.selection()
+        if not selection:
+            return "break"
+
+        item = tree.item(selection[0])
+        values = item.get("values", [])
+        if not values:
+            return "break"
+
+        mod_name = str(values[0])
+        self.root.clipboard_clear()
+        self.root.clipboard_append(mod_name)
+        self.show_temporary_status(f"Скопировано: {mod_name}", color="blue")
+        return "break"
+
     def on_column_click(self, column, tree):
         """Обработчик клика на заголовок колонки для сортировки."""
         category = self.get_tree_category(tree)
@@ -755,20 +813,20 @@ class LocalizationCheckerGUI:
             self.current_path = Path(directory)
             self.select_btn.config(text=f"📁 {self.current_path.name}")
             self.check_btn.config(state=tk.NORMAL)
-            self.status_label.config(text=f"Папка выбрана: {self.current_path}", foreground="black")
+            self.set_status_message(f"Папка выбрана: {self.current_path}", color="black")
             
             # Автоматически ищем папку TranslatedMods
             rtfe_path = find_rtfe_directory(self.current_path)
             if rtfe_path:
                 set_rtfe_path(rtfe_path)
-                self.status_label.config(
-                    text=f"Папка выбрана: {self.current_path} | TranslatedMods найден: {rtfe_path}", 
-                    foreground="blue"
+                self.set_status_message(
+                    f"Папка выбрана: {self.current_path} | TranslatedMods найден: {rtfe_path}", 
+                    color="blue"
                 )
             else:
-                self.status_label.config(
-                    text=f"Папка выбрана: {self.current_path} | TranslatedMods не найден", 
-                    foreground="orange"
+                self.set_status_message(
+                    f"Папка выбрана: {self.current_path} | TranslatedMods не найден", 
+                    color="orange"
                 )
     
     def update_progress(self, current, total):
@@ -819,9 +877,9 @@ class LocalizationCheckerGUI:
         
         # Обновляем статус
         total = len(self.results["full"]) + len(self.results["partial"]) + len(self.results["missing"])
-        self.status_label.config(
-            text=f"Всего: {total} | [100%]: {len(self.results['full'])} | [Частично]: {len(self.results['partial'])} | [Нет]: {len(self.results['missing'])}",
-            foreground="green"
+        self.set_status_message(
+            f"Всего: {total} | [100%]: {len(self.results['full'])} | [Частично]: {len(self.results['partial'])} | [Нет]: {len(self.results['missing'])}",
+            color="green"
         )
         
         # Показываем сообщение о завершении
@@ -869,7 +927,7 @@ class LocalizationCheckerGUI:
                     mod["ru_keys"],
                     mod["en_keys"],
                     f"{mod['percentage']}%"
-                ))
+                ), tags=(self.get_source_tag(mod.get("source", "none")),))
         
         if filter_type in ("all", "Неполный"):
             # Фильтруем по поисковому тексту
@@ -887,7 +945,7 @@ class LocalizationCheckerGUI:
                     mod["en_keys"],
                     f"{mod['percentage']}%",
                     f"{missing_count} ключей"
-                ))
+                ), tags=(self.get_source_tag(mod.get("source", "none")),))
         
         if filter_type in ("all", "Отсутствует"):
             # Фильтруем по поисковому тексту
@@ -903,7 +961,7 @@ class LocalizationCheckerGUI:
                     mod["mod_name"],
                     mod["en_keys"],
                     reason
-                ))
+                ), tags=(self.get_source_tag(mod.get("source", "none")),))
     
     def show_details(self, tree):
         """Показывает детали выбранного мода."""
@@ -1041,7 +1099,9 @@ def main_cli():
     )
     
     parser.add_argument(
+        "--translated_mods",
         "--rtfe",
+        dest="translated_mods",
         type=str,
         default=None,
         help="Путь к папке TranslatedMods с переводами (необязательно)"
@@ -1061,8 +1121,8 @@ def main_cli():
     
     # Ищем и устанавливаем путь к TranslatedMods
     rtfe_path = None
-    if args.rtfe:
-        rtfe_path = Path(args.rtfe)
+    if args.translated_mods:
+        rtfe_path = Path(args.translated_mods)
         if not rtfe_path.exists():
             print(f"⚠️  Предупреждение: Указанная папка TranslatedMods не существует: {rtfe_path}")
             rtfe_path = None
