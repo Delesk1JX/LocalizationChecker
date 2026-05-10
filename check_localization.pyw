@@ -34,7 +34,7 @@ except ImportError:
 
 
 # Глобальные переменные
-RTFE_PATH: Optional[Path] = None
+TRANSLATED_MODS_PATH: Optional[Path] = None
 CONFIG: Dict[str, Any] = {}
 
 
@@ -54,18 +54,18 @@ def load_config(config_file: str = "config.json") -> Dict[str, Any]:
         if config_path.exists():
             with open(config_path, 'r', encoding='utf-8') as f:
                 CONFIG = json.load(f)
-                # Устанавливаем RTFE_PATH из конфига, если указан
-                if CONFIG.get("rtfe_path"):
-                    rtfe_path = Path(CONFIG["rtfe_path"])
+                # Устанавливаем TRANSLATED_MODS_PATH из конфига, если указан
+                if CONFIG.get("translated_mods_path"):
+                    translated_mods_path = Path(CONFIG["translated_mods_path"])
                     # Проверяем несколько возможных расположений
                     possible_paths = [
-                        rtfe_path,
-                        Path.cwd() / rtfe_path,
-                        Path.cwd().parent / rtfe_path,
+                        translated_mods_path,
+                        Path.cwd() / translated_mods_path,
+                        Path.cwd().parent / translated_mods_path,
                     ]
                     for path in possible_paths:
                         if path.exists() and path.is_dir():
-                            set_rtfe_path(path)
+                            set_translated_mods_path(path)
                             break
                 CONFIG.setdefault("row_colors", {
                     "jar": "#d4f4dd",
@@ -78,7 +78,7 @@ def load_config(config_file: str = "config.json") -> Dict[str, Any]:
     
     # Значения по умолчанию
     CONFIG = {
-        "rtfe_path": "TranslatedMods",
+        "translated_mods_path": "TranslatedMods",
         "supported_languages": ["ru_ru"],
         "max_workers": 4,
         "show_statistics": True,
@@ -92,18 +92,18 @@ def load_config(config_file: str = "config.json") -> Dict[str, Any]:
     return CONFIG
 
 
-def set_rtfe_path(path: Optional[Path]):
+def set_translated_mods_path(path: Optional[Path]):
     """Устанавливает путь к папке TranslatedMods."""
-    global RTFE_PATH
-    RTFE_PATH = path
+    global TRANSLATED_MODS_PATH
+    TRANSLATED_MODS_PATH = path
 
 
-def get_rtfe_path() -> Optional[Path]:
+def get_translated_mods_path() -> Optional[Path]:
     """Возвращает текущий путь к папке TranslatedMods."""
-    return RTFE_PATH
+    return TRANSLATED_MODS_PATH
 
 
-def find_rtfe_directory(base_path: Path) -> Optional[Path]:
+def find_translated_mods_directory(base_path: Path) -> Optional[Path]:
     """
     Ищет папку TranslatedMods рядом с указанной директорией, в ней или внутри HelperTranslatorRU.
     
@@ -156,7 +156,7 @@ def extract_json_from_file(file_path: Path) -> Optional[Dict[str, str]]:
         return None
 
 
-def find_ru_ru_in_rtfe(mod_name: str) -> Optional[Path]:
+def find_ru_ru_in_translated_mods(mod_name: str) -> Optional[Path]:
     """
     Ищет файл ru_ru.json для мода в папке TranslatedMods.
     
@@ -172,7 +172,7 @@ def find_ru_ru_in_rtfe(mod_name: str) -> Optional[Path]:
     Returns:
         Путь к файлу ru_ru.json или None если не найден
     """
-    if RTFE_PATH is None:
+    if TRANSLATED_MODS_PATH is None:
         return None
     
     # mod_name уже является чистым именем мода из assets
@@ -180,15 +180,15 @@ def find_ru_ru_in_rtfe(mod_name: str) -> Optional[Path]:
     
     # Пробуем найти папку мода в TranslatedMods
     for name in possible_names:
-        mod_dir = RTFE_PATH / name
+        mod_dir = TRANSLATED_MODS_PATH / name
         if mod_dir.exists() and mod_dir.is_dir():
             ru_ru_path = mod_dir / "lang" / "ru_ru.json"
             if ru_ru_path.exists():
                 return ru_ru_path
     
     # Если точное совпадение не найдено, ищем по частичному совпадению
-    if RTFE_PATH.exists():
-        for item in RTFE_PATH.iterdir():
+    if TRANSLATED_MODS_PATH.exists():
+        for item in TRANSLATED_MODS_PATH.iterdir():
             if item.is_dir():
                 # Проверяем, содержит ли название папки название мода или наоборот
                 if mod_name.lower() in item.name.lower() or item.name.lower() in mod_name.lower():
@@ -208,14 +208,14 @@ def find_ru_ru_in_rtfe(mod_name: str) -> Optional[Path]:
         # Создаем аббревиатуру из первых букв слов
         if len(words) > 1:
             abbrev = ''.join([w[0] for w in words if w])
-            for item in RTFE_PATH.iterdir():
+            for item in TRANSLATED_MODS_PATH.iterdir():
                 if item.is_dir() and item.name.lower() == abbrev:
                     ru_ru_path = item / "lang" / "ru_ru.json"
                     if ru_ru_path.exists():
                         return ru_ru_path
         
         # Также проверяем, начинается ли mod_name с названия папки
-        for item in RTFE_PATH.iterdir():
+        for item in TRANSLATED_MODS_PATH.iterdir():
             if item.is_dir() and len(item.name) >= 2:
                 # Проверяем первые несколько букв
                 if mod_name.lower().startswith(item.name.lower()):
@@ -258,7 +258,7 @@ def extract_mod_name_from_assets(jar_path: Path) -> Optional[str]:
     return None
 
 
-def check_rtfe_localization(jar_path: Path, en_data: Dict[str, str], en_us_path: str) -> Dict[str, Any]:
+def check_translated_mods_localization(jar_path: Path, en_data: Dict[str, str], en_us_path: str) -> Dict[str, Any]:
     """
     Проверяет наличие перевода для мода в папке TranslatedMods.
     
@@ -273,7 +273,7 @@ def check_rtfe_localization(jar_path: Path, en_data: Dict[str, str], en_us_path:
     result = {
         "found": False,
         "status": "not_found",  # full, partial, not_found
-        "source": None,  # "rtfe" или None
+        "source": None,  # "translated_mods" или None
         "ru_keys": 0,
         "en_keys": len(en_data),
         "percentage": 0.0,
@@ -282,7 +282,7 @@ def check_rtfe_localization(jar_path: Path, en_data: Dict[str, str], en_us_path:
         "error": None
     }
     
-    if RTFE_PATH is None:
+    if TRANSLATED_MODS_PATH is None:
         return result
     
     # Извлекаем имя мода из assets внутри .jar файла
@@ -293,7 +293,7 @@ def check_rtfe_localization(jar_path: Path, en_data: Dict[str, str], en_us_path:
         return result
     
     # Ищем ru_ru.json в TranslatedMods используя имя мода из assets
-    ru_ru_path = find_ru_ru_in_rtfe(mod_name)
+    ru_ru_path = find_ru_ru_in_translated_mods(mod_name)
     
     if ru_ru_path is None:
         return result
@@ -306,7 +306,7 @@ def check_rtfe_localization(jar_path: Path, en_data: Dict[str, str], en_us_path:
         return result
     
     result["found"] = True
-    result["source"] = "rtfe"
+    result["source"] = "translated_mods"
     result["ru_keys"] = len(ru_data)
     
     en_keys_set = set(en_data.keys())
@@ -373,7 +373,7 @@ def extract_json_from_jar(jar_path: Path, lang_path: str) -> Optional[Dict[str, 
 def find_lang_files_in_jar(jar_path: Path) -> Tuple[Optional[str], Optional[str], bool]:
     """
     Ищет файлы en_us.json и ru_ru.json внутри .jar файла.
-    Оптимизирована: ранний выход при отсутствии /lang/, завершает поиск после нахождения en_us.
+    Проходит по всем файлам архива для обнаружения обоих языковых файлов.
     
     Returns:
         Tuple[путь_к_en_us, путь_к_ru_ru, есть ли папка lang] внутри архива
@@ -396,10 +396,11 @@ def find_lang_files_in_jar(jar_path: Path) -> Tuple[Optional[str], Optional[str]
                 # Ищем файлы локализации
                 if normalized.endswith('/lang/en_us.json'):
                     en_us_path = name
-                    # Прерываем цикл, если нашли en_us (он обязателен)
-                    break
                 elif normalized.endswith('/lang/ru_ru.json'):
                     ru_ru_path = name
+
+                # Продолжаем поиск, даже если нашли один из файлов,
+                # чтобы обнаружить оба (и en_us, и ru_ru)
     except zipfile.BadZipFile:
         return (None, None, False)
     
@@ -418,7 +419,7 @@ def check_jar_localization(jar_path: Path) -> Dict[str, Any]:
     result = {
         "mod_name": jar_path.name,
         "status": "missing",  # full, partial, missing
-        "source": "none",  # "jar", "rtfe", "none"
+        "source": "none",  # "jar", "translated_mods", "none"
         "ru_keys": 0,
         "en_keys": 0,
         "percentage": 0.0,
@@ -491,19 +492,19 @@ def check_jar_localization(jar_path: Path) -> Dict[str, Any]:
             return result
     
     # Если встроенного перевода нет, проверяем TranslatedMods
-    if RTFE_PATH is not None:
-        rtfe_result = check_rtfe_localization(jar_path, en_data, en_us_path)
+    if TRANSLATED_MODS_PATH is not None:
+        translated_mods_result = check_translated_mods_localization(jar_path, en_data, en_us_path)
         
-        if rtfe_result["found"]:
-            result["source"] = "rtfe"
-            result["ru_keys"] = rtfe_result["ru_keys"]
-            result["percentage"] = rtfe_result["percentage"]
-            result["missing_keys"] = rtfe_result["missing_keys"]
-            result["extra_keys"] = rtfe_result["extra_keys"]
+        if translated_mods_result["found"]:
+            result["source"] = "translated_mods"
+            result["ru_keys"] = translated_mods_result["ru_keys"]
+            result["percentage"] = translated_mods_result["percentage"]
+            result["missing_keys"] = translated_mods_result["missing_keys"]
+            result["extra_keys"] = translated_mods_result["extra_keys"]
             
-            if rtfe_result["status"] == "full":
+            if translated_mods_result["status"] == "full":
                 result["status"] = "full"
-            elif rtfe_result["status"] == "partial":
+            elif translated_mods_result["status"] == "partial":
                 result["status"] = "partial"
             else:
                 result["status"] = "missing"
@@ -816,12 +817,12 @@ class LocalizationCheckerGUI:
             self.set_status_message(f"Папка выбрана: {self.current_path}", color="black")
             
             # Автоматически ищем папку TranslatedMods
-            rtfe_path = find_rtfe_directory(self.current_path)
-            if rtfe_path:
-                set_rtfe_path(rtfe_path)
-                self.set_status_message(
-                    f"Папка выбрана: {self.current_path} | TranslatedMods найден: {rtfe_path}", 
-                    color="blue"
+            translated_mods_path = find_translated_mods_directory(self.current_path)
+            if translated_mods_path:
+                set_translated_mods_path(translated_mods_path)
+                self.status_label.config(
+                    text=f"Папка выбрана: {self.current_path} | TranslatedMods найден: {translated_mods_path}", 
+                    foreground="blue"
                 )
             else:
                 self.set_status_message(
@@ -1120,18 +1121,18 @@ def main_cli():
         return 1
     
     # Ищем и устанавливаем путь к TranslatedMods
-    rtfe_path = None
+    translated_mods_path = None
     if args.translated_mods:
-        rtfe_path = Path(args.translated_mods)
-        if not rtfe_path.exists():
-            print(f"⚠️  Предупреждение: Указанная папка TranslatedMods не существует: {rtfe_path}")
-            rtfe_path = None
+        translated_mods_path = Path(args.translated_mods)
+        if not translated_mods_path.exists():
+            print(f"⚠️  Предупреждение: Указанная папка TranslatedMods не существует: {translated_mods_path}")
+            translated_mods_path = None
     else:
-        rtfe_path = find_rtfe_directory(base_path)
+        translated_mods_path = find_translated_mods_directory(base_path)
     
-    if rtfe_path:
-        set_rtfe_path(rtfe_path)
-        print(f"📦 TranslatedMods найден: {rtfe_path}")
+    if translated_mods_path:
+        set_translated_mods_path(translated_mods_path)
+        print(f"📦 TranslatedMods найден: {translated_mods_path}")
     else:
         print("📦 TranslatedMods не найден (проверка только встроенных переводов)")
     
