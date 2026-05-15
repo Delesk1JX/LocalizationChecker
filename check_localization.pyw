@@ -187,23 +187,26 @@ def find_ru_ru_in_translated_mods(mod_name: str) -> Optional[Path]:
             if ru_ru_path.exists():
                 return ru_ru_path
     
-    # Если точное совпадение не найдено, ищем по частичному совпадению
+    # Если точное совпадение не найдено, ищем по более строгим правилам.
+    # Избегаем ложных совпадений для очень коротких имен, например 'aq'.
     if TRANSLATED_MODS_PATH.exists():
         for item in TRANSLATED_MODS_PATH.iterdir():
             if item.is_dir():
-                # Проверяем, содержит ли название папки название мода или наоборот
-                if mod_name.lower() in item.name.lower() or item.name.lower() in mod_name.lower():
-                    ru_ru_path = item / "lang" / "ru_ru.json"
-                    if ru_ru_path.exists():
-                        return ru_ru_path
+                # Проверяем, содержит ли название папки название мода или наоборот.
+                # Применяем правило только для длинных имен, чтобы не сопоставлять 'aq' с 'aquaculture'.
+                if len(mod_name) > 3 and len(item.name) > 3:
+                    if mod_name.lower() in item.name.lower() or item.name.lower() in mod_name.lower():
+                        ru_ru_path = item / "lang" / "ru_ru.json"
+                        if ru_ru_path.exists():
+                            return ru_ru_path
         
         # Дополнительная проверка: если имя папки является аббревиатурой или префиксом
         # Например, ali -> advancedlootinfo (a-l-i первые буквы слов)
         import re
-        # Разбиваем mod_name на слова (по заглавным буквам или подчеркиваниям)
+        # Разбиваем mod_name на слова (по подчеркиваниям или дефисам)
         words = re.split(r'[_-]', mod_name.lower())
         if len(words) == 1:
-            # Если одно слово, пробуем разбить по заглавным буквам
+            # Если одно слово, пробуем разбить по буквам
             words = re.findall(r'[a-z]+', mod_name.lower())
         
         # Создаем аббревиатуру из первых букв слов
@@ -215,10 +218,10 @@ def find_ru_ru_in_translated_mods(mod_name: str) -> Optional[Path]:
                     if ru_ru_path.exists():
                         return ru_ru_path
         
-        # Также проверяем, начинается ли mod_name с названия папки
+        # Также проверяем, начинается ли mod_name с названия папки.
+        # Но только для более длинных имен, чтобы избежать неправильных совпадений.
         for item in TRANSLATED_MODS_PATH.iterdir():
-            if item.is_dir() and len(item.name) >= 2:
-                # Проверяем первые несколько букв
+            if item.is_dir() and len(item.name) > 3 and len(mod_name) > 4:
                 if mod_name.lower().startswith(item.name.lower()):
                     ru_ru_path = item / "lang" / "ru_ru.json"
                     if ru_ru_path.exists():
