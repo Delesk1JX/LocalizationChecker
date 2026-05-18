@@ -461,7 +461,28 @@ def check_jar_localization(jar_path: Path) -> Dict[str, Any]:
         result["error"] = "Файл en_us.json пустой (мод пропущен)"
         return result
     
-    # Сначала проверяем ru_ru.json внутри .jar файла
+    # Сначала проверяем ru_ru.json в папке TranslatedMods (если доступна)
+    # Это позволяет использовать актуальные переводы вместо устаревших из .jar
+    if TRANSLATED_MODS_PATH is not None:
+        translated_mods_result = check_translated_mods_localization(jar_path, en_data, en_us_path)
+        
+        if translated_mods_result["found"]:
+            result["source"] = "translated_mods"
+            result["ru_keys"] = translated_mods_result["ru_keys"]
+            result["percentage"] = translated_mods_result["percentage"]
+            result["missing_keys"] = translated_mods_result["missing_keys"]
+            result["extra_keys"] = translated_mods_result["extra_keys"]
+            
+            if translated_mods_result["status"] == "full":
+                result["status"] = "full"
+            elif translated_mods_result["status"] == "partial":
+                result["status"] = "partial"
+            else:
+                result["status"] = "missing"
+            
+            return result
+    
+    # Если перевода нет в TranslatedMods, проверяем ru_ru.json внутри .jar файла
     if ru_ru_path is not None:
         ru_data = extract_json_from_jar(jar_path, ru_ru_path)
         
@@ -492,26 +513,6 @@ def check_jar_localization(jar_path: Path) -> Dict[str, Any]:
                     result["status"] = "full"
                 else:
                     result["status"] = "partial"
-            
-            return result
-    
-    # Если встроенного перевода нет, проверяем TranslatedMods
-    if TRANSLATED_MODS_PATH is not None:
-        translated_mods_result = check_translated_mods_localization(jar_path, en_data, en_us_path)
-        
-        if translated_mods_result["found"]:
-            result["source"] = "translated_mods"
-            result["ru_keys"] = translated_mods_result["ru_keys"]
-            result["percentage"] = translated_mods_result["percentage"]
-            result["missing_keys"] = translated_mods_result["missing_keys"]
-            result["extra_keys"] = translated_mods_result["extra_keys"]
-            
-            if translated_mods_result["status"] == "full":
-                result["status"] = "full"
-            elif translated_mods_result["status"] == "partial":
-                result["status"] = "partial"
-            else:
-                result["status"] = "missing"
             
             return result
     
