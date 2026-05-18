@@ -1,0 +1,26 @@
+{
+  "scan_directory": "/workspace/test_mods",
+  "total_mods": 1,
+  "summary": {
+    "full_translation": 1,
+    "partial_translation": 0,
+    "missing_translation": 0
+  },
+  "mods": {
+    "full": [
+      {
+        "mod_name": "bclib.jar",
+        "status": "full",
+        "source": "translated_mods",
+        "ru_keys": 3,
+        "en_keys": 3,
+        "percentage": 100.0,
+        "missing_keys": [],
+        "extra_keys": [],
+        "error": null
+      }
+    ],
+    "partial": [],
+    "missing": []
+  }
+}
