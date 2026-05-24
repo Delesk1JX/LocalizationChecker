@@ -594,6 +594,11 @@ class LocalizationCheckerGUI:
         self.status_message = ""
         self.status_color = "gray"
         
+        # Тема оформления
+        self.dark_mode = False
+        self.light_bg = "#f0f0f0"
+        self.dark_bg = "#1e1e1e"
+        
         # Отслеживание сортировки для каждой таблицы
         self.sort_state = {
             "full": {"column": None, "reverse": False},
@@ -617,6 +622,10 @@ class LocalizationCheckerGUI:
         
         self.export_btn = ttk.Button(top_frame, text="💾 Экспорт в JSON", command=self.export_results, state=tk.DISABLED)
         self.export_btn.pack(side=tk.LEFT, padx=5)
+        
+        # Кнопка переключения темы
+        self.theme_btn = ttk.Button(top_frame, text="🌙 Тёмная тема", command=self.toggle_theme)
+        self.theme_btn.pack(side=tk.RIGHT, padx=5)
         
         ttk.Button(top_frame, text="❌ Закрыть", command=self.root.quit).pack(side=tk.RIGHT, padx=5)
         
@@ -745,6 +754,20 @@ class LocalizationCheckerGUI:
         tree.tag_configure("source_jar", background=colors.get("jar", "#d4f4dd"))
         tree.tag_configure("source_translated_mods", background=colors.get("translated_mods", "#d1e7ff"))
         tree.tag_configure("source_missing", background=colors.get("missing", "#ffe4e1"))
+
+    def toggle_theme(self):
+        """Переключает тему оформления (светлая/тёмная)."""
+        self.dark_mode = not self.dark_mode
+        
+        if self.dark_mode:
+            bg_color = self.dark_bg
+            self.theme_btn.config(text="☀️ Светлая тема")
+        else:
+            bg_color = self.light_bg
+            self.theme_btn.config(text="🌙 Тёмная тема")
+        
+        # Меняем только фон главного окна
+        self.root.configure(bg=bg_color)
 
     def copy_selected_mod_name(self, tree):
         """Копирует название мода из выделенной строки в буфер обмена."""
