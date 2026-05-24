@@ -588,6 +588,27 @@ class LocalizationCheckerGUI:
         self.root.geometry("900x700")
         self.root.minsize(800, 600)
         
+        # Настройка тёмной темы
+        self.dark_theme = {
+            "bg": "#2b2b2b",
+            "fg": "#ffffff",
+            "frame_bg": "#1e1e1e",
+            "tree_bg": "#252525",
+            "tree_fg": "#ffffff",
+            "button_bg": "#3c3c3c",
+            "button_fg": "#ffffff",
+            "entry_bg": "#3c3c3c",
+            "entry_fg": "#ffffff",
+            "highlight": "#007acc",
+            "row_colors": {
+                "jar": "#2d4a3e",
+                "translated_mods": "#2d3a4a",
+                "missing": "#4a2d2d"
+            }
+        }
+        
+        self.setup_dark_theme()
+        
         self.current_path = None
         self.results = None
         self.status_message = ""
@@ -601,6 +622,43 @@ class LocalizationCheckerGUI:
         }
         
         self.setup_ui()
+    
+    def setup_dark_theme(self):
+        """Настраивает тёмную тему для всего приложения."""
+        style = ttk.Style()
+        style.theme_use('clam')
+        
+        # Основные цвета
+        bg = self.dark_theme["bg"]
+        fg = self.dark_theme["fg"]
+        frame_bg = self.dark_theme["frame_bg"]
+        tree_bg = self.dark_theme["tree_bg"]
+        tree_fg = self.dark_theme["tree_fg"]
+        button_bg = self.dark_theme["button_bg"]
+        button_fg = self.dark_theme["button_fg"]
+        highlight = self.dark_theme["highlight"]
+        
+        # Конфигурация стилей
+        style.configure(".", background=bg, foreground=fg, font=("Segoe UI", 10))
+        style.configure("TFrame", background=frame_bg)
+        style.configure("TLabel", background=frame_bg, foreground=fg)
+        style.configure("TButton", background=button_bg, foreground=button_fg)
+        style.map("TButton", background=[("active", highlight)])
+        style.configure("TProgressbar", background=highlight, troughcolor="#3c3c3c")
+        style.configure("Treeview", background=tree_bg, foreground=tree_fg, fieldbackground=tree_bg)
+        style.configure("Treeview.Heading", background=button_bg, foreground=fg)
+        style.map("Treeview.Heading", background=[("active", highlight)])
+        style.configure("TNotebook", background=frame_bg)
+        style.configure("TNotebook.Tab", background=button_bg, foreground=fg, padding=[12, 4])
+        style.map("TNotebook.Tab", background=[("selected", highlight)])
+        style.configure("TCombobox", background=button_bg, foreground=fg, fieldbackground=tree_bg)
+        style.configure("TScrollbar", background=button_bg, troughcolor="#3c3c3c")
+        
+        # Обновляем цвета в конфиге
+        CONFIG["row_colors"] = self.dark_theme["row_colors"]
+        
+        # Применяем цвета к корневому окну
+        self.root.configure(bg=bg)
     
     def setup_ui(self):
         """Настройка пользовательского интерфейса."""
