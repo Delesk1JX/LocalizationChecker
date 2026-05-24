@@ -777,13 +777,17 @@ class LocalizationCheckerGUI:
             # Настраиваем стиль ttk виджетов для тёмной темы
             try:
                 self.style.configure("Treeview", background=dark_bg, fieldbackground=dark_bg, foreground=dark_fg, borderwidth=0)
-                self.style.configure("Treeview.Heading", background="#2e2e2e", foreground=dark_fg, borderwidth=0)
+                self.style.configure("Treeview.Heading", background="#e0e0e0", foreground="#000000", borderwidth=0)
+                self.style.map("Treeview.Heading", background=[("active", "#d0d0d0")])
                 self.style.configure("TNotebook", background=dark_bg)
                 # Вкладки - светлый фон и чёрный текст для читаемости
                 self.style.configure("TNotebook.Tab", background="#e0e0e0", foreground="#000000")
+                self.style.map("TNotebook.Tab", background=[("selected", "#ffffff")])
                 # Кнопки и комбобоксы - тёмный текст на светлом фоне для читаемости
                 self.style.configure("TButton", background="#e0e0e0", foreground="#000000", padding=5)
+                self.style.map("TButton", background=[("active", "#d0d0d0")])
                 self.style.configure("TCombobox", background="#e0e0e0", foreground="#000000", fieldbackground="#ffffff")
+                self.style.map("TCombobox", fieldbackground=[("readonly", "#e0e0e0")], foreground=[("readonly", "#000000")])
             except Exception:
                 pass
             
@@ -828,11 +832,15 @@ class LocalizationCheckerGUI:
             try:
                 self.style.configure("Treeview", background="white", fieldbackground="white", foreground="black", borderwidth=0)
                 self.style.configure("Treeview.Heading", background="#f0f0f0", foreground="black", borderwidth=0)
+                self.style.map("Treeview.Heading", background=[("active", "#e0e0e0")])
                 self.style.configure("TNotebook", background=default_bg)
                 self.style.configure("TNotebook.Tab", background=default_bg, foreground="black")
+                self.style.map("TNotebook.Tab", background=[("selected", "#ffffff")])
                 # Кнопки и комбобоксы - стандартные цвета для светлой темы
                 self.style.configure("TButton", background="#e0e0e0", foreground="#000000", padding=5)
+                self.style.map("TButton", background=[("active", "#d0d0d0")])
                 self.style.configure("TCombobox", background="#e0e0e0", foreground="#000000", fieldbackground="#ffffff")
+                self.style.map("TCombobox", fieldbackground=[("readonly", "#e0e0e0")], foreground=[("readonly", "#000000")])
             except Exception:
                 pass
         
