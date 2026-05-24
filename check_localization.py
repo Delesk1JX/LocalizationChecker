@@ -778,7 +778,8 @@ class LocalizationCheckerGUI:
             try:
                 self.style.configure("Treeview", background=dark_bg, fieldbackground=dark_bg, foreground=dark_fg, borderwidth=0)
                 # Заголовки колонок - чёрный фон и белый текст для тёмной темы
-                self.style.configure("Treeview.Heading", background="#1e1e1e", foreground="#ffffff", borderwidth=0)
+                self.style.configure("Treeview.Heading", background="#000000", foreground="#ffffff", borderwidth=0)
+                self.style.map("Treeview.Heading", background=[("active", "#333333")])
                 self.style.configure("TNotebook", background=dark_bg)
                 # Вкладки - светлый фон и чёрный текст для читаемости
                 self.style.configure("TNotebook.Tab", background="#e0e0e0", foreground="#000000")
@@ -871,7 +872,8 @@ class LocalizationCheckerGUI:
         # Заголовки колонок: тёмная тема - чёрный фон/белый текст, светлая - светлый фон/чёрный текст
         try:
             if self.dark_mode:
-                self.style.configure("Treeview.Heading", background="#1e1e1e", foreground="#ffffff")
+                self.style.configure("Treeview.Heading", background="#000000", foreground="#ffffff")
+                self.style.map("Treeview.Heading", background=[("active", "#333333")])
             else:
                 self.style.configure("Treeview.Heading", background="#e0e0e0", foreground="#000000")
         except Exception:
