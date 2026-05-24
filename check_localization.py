@@ -512,6 +512,25 @@ def extract_json_from_jar(jar_path: Path, lang_path: str) -> Optional[Dict[str, 
         return None
 
 
+def _is_preferred_asset_lang_path(path: str) -> bool:
+    """Возвращает True для пути вида assets/<modid>/lang/<file>."""
+    normalized = path.replace('\\', '/').lower()
+    parts = normalized.split('/')
+    return len(parts) >= 4 and parts[0] == 'assets' and parts[2] == 'lang'
+
+
+def _select_best_lang_path(candidates: List[str]) -> Optional[str]:
+    """Выбирает наиболее подходящий путь среди кандидатов."""
+    if not candidates:
+        return None
+
+    preferred = [path for path in candidates if _is_preferred_asset_lang_path(path)]
+    if preferred:
+        return min(preferred, key=lambda p: len(p.replace('\\', '/').split('/')))
+
+    return min(candidates, key=lambda p: len(p.replace('\\', '/').split('/')))
+
+
 def find_lang_files_in_jar(jar_path: Path) -> Tuple[Optional[str], Optional[str], Optional[str], bool, bool]:
     """
     Ищет файлы en_us.json, ru_ru.json и .lang файлы внутри .jar файла.
@@ -520,9 +539,9 @@ def find_lang_files_in_jar(jar_path: Path) -> Tuple[Optional[str], Optional[str]
     Returns:
         Tuple[путь_к_en_us, путь_к_ru_ru, путь_к_en_lang, есть ли папка lang, есть ли .lang файлы] внутри архива
     """
-    en_us_path = None
-    ru_ru_path = None
-    en_lang_path = None  # Для старых модов с en_US.lang
+    en_us_candidates: List[str] = []
+    ru_ru_candidates: List[str] = []
+    en_lang_candidates: List[str] = []  # Для старых модов с en_US.lang
     has_lang_dir = False
     has_lang_files = False
     
@@ -539,12 +558,12 @@ def find_lang_files_in_jar(jar_path: Path) -> Tuple[Optional[str], Optional[str]
                 
                 # Ищем файлы локализации JSON (Minecraft 1.13+)
                 if normalized.endswith('/lang/en_us.json'):
-                    en_us_path = name
+                    en_us_candidates.append(name)
                 elif normalized.endswith('/lang/ru_ru.json'):
-                    ru_ru_path = name
+                    ru_ru_candidates.append(name)
                 # Ищем файлы локализации .lang (Minecraft 1.12.2 и ниже)
-                elif normalized.endswith('/lang/en_us.lang') or normalized.endswith('/lang/en_us.lang'):
-                    en_lang_path = name
+                elif normalized.endswith('/lang/en_us.lang'):
+                    en_lang_candidates.append(name)
                     has_lang_files = True
                 elif normalized.endswith('.lang'):
                     has_lang_files = True
@@ -553,6 +572,10 @@ def find_lang_files_in_jar(jar_path: Path) -> Tuple[Optional[str], Optional[str]
                 # чтобы обнаружить все форматы
     except zipfile.BadZipFile:
         return (None, None, None, False, False)
+    
+    en_us_path = _select_best_lang_path(en_us_candidates)
+    ru_ru_path = _select_best_lang_path(ru_ru_candidates)
+    en_lang_path = _select_best_lang_path(en_lang_candidates)
     
     return (en_us_path, ru_ru_path, en_lang_path, has_lang_dir, has_lang_files)
 
