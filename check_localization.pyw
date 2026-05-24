@@ -145,7 +145,8 @@ def extract_json_from_file(file_path: Path) -> Optional[Dict[str, str]]:
         if not file_path.exists():
             return None
         
-        with open(file_path, 'r', encoding='utf-8') as f:
+        # Используем utf-8-sig для корректной обработки BOM (Byte Order Mark)
+        with open(file_path, 'r', encoding='utf-8-sig') as f:
             content = f.read()
             data = json.loads(content)
             return data
@@ -363,7 +364,8 @@ def extract_json_from_jar(jar_path: Path, lang_path: str) -> Optional[Dict[str, 
                 return None
             
             with jar_file.open(actual_path) as f:
-                content = f.read().decode('utf-8')
+                # Используем utf-8-sig для корректной обработки BOM (Byte Order Mark)
+                content = f.read().decode('utf-8-sig')
                 data = json.loads(content)
                 return data
     except (zipfile.BadZipFile, json.JSONDecodeError, UnicodeDecodeError, KeyError) as e:
@@ -593,6 +595,7 @@ class LocalizationCheckerGUI:
         self.results = None
         self.status_message = ""
         self.status_color = "gray"
+        self.dark_mode = False
         
         # Отслеживание сортировки для каждой таблицы
         self.sort_state = {
@@ -606,85 +609,76 @@ class LocalizationCheckerGUI:
     def setup_ui(self):
         """Настройка пользовательского интерфейса."""
         # Верхняя панель с кнопками
-        top_frame = ttk.Frame(self.root, padding="10")
-        top_frame.pack(fill=tk.X)
+        self.top_frame = tk.Frame(self.root)
+        self.top_frame.pack(fill=tk.X, padx=10, pady=10)
         
-        self.select_btn = ttk.Button(top_frame, text="📁 Выбрать папку с модами", command=self.select_directory)
+        self.select_btn = ttk.Button(self.top_frame, text="📁 Выбрать папку с модами", command=self.select_directory)
         self.select_btn.pack(side=tk.LEFT, padx=5)
         
-        self.check_btn = ttk.Button(top_frame, text="▶️ Проверить", command=self.start_check, state=tk.DISABLED)
+        self.check_btn = ttk.Button(self.top_frame, text="▶️ Проверить", command=self.start_check, state=tk.DISABLED)
         self.check_btn.pack(side=tk.LEFT, padx=5)
         
-        self.export_btn = ttk.Button(top_frame, text="💾 Экспорт в JSON", command=self.export_results, state=tk.DISABLED)
+        self.export_btn = ttk.Button(self.top_frame, text="💾 Экспорт в JSON", command=self.export_results, state=tk.DISABLED)
         self.export_btn.pack(side=tk.LEFT, padx=5)
         
-        ttk.Button(top_frame, text="❌ Закрыть", command=self.root.quit).pack(side=tk.RIGHT, padx=5)
+        # Кнопка переключения темы
+        self.theme_btn = ttk.Button(self.top_frame, text="🌙 Тёмная тема", command=self.toggle_theme)
+        self.theme_btn.pack(side=tk.RIGHT, padx=5)
         
-        # Панель прогресса
-        self.progress_frame = ttk.Frame(self.root, padding="10")
-        self.progress_frame.pack(fill=tk.X)
+        ttk.Button(self.top_frame, text="❌ Закрыть", command=self.root.quit).pack(side=tk.RIGHT, padx=5)
         
-        self.progress_label = ttk.Label(self.progress_frame, text="Готов к работе")
+        # Стиль для виджетов ttk — будем менять для тёмной темы
+        self.style = ttk.Style(self.root)
+
+        # Панель прогресса - используем tk.Frame для поддержки смены цветов фона
+        self.progress_frame = tk.Frame(self.root)
+        self.progress_frame.pack(fill=tk.X, padx=10, pady=10)
+        
+        self.progress_label = tk.Label(self.progress_frame, text="Готов к работе")
         self.progress_label.pack(side=tk.LEFT, padx=5)
         
         self.progress_bar = ttk.Progressbar(self.progress_frame, mode='determinate', length=400)
         self.progress_bar.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
         
-        # Панель поиска и фильтрации
-        search_frame = ttk.Frame(self.root, padding="10")
-        search_frame.pack(fill=tk.X)
-        
-        ttk.Label(search_frame, text="🔍 Поиск по имени:").pack(side=tk.LEFT, padx=5)
+        # Панель поиска и фильтрации (используем tk.Frame чтобы можно было менять bg)
+        self.search_frame = tk.Frame(self.root)
+        self.search_frame.pack(fill=tk.X, padx=10, pady=10)
+
+        tk.Label(self.search_frame, text="🔍 Поиск по имени:").pack(side=tk.LEFT, padx=5)
         self.search_var = tk.StringVar()
         self.search_var.trace_add("write", self.on_search_change)
-        search_entry = ttk.Entry(search_frame, textvariable=self.search_var, width=30)
+        search_entry = ttk.Entry(self.search_frame, textvariable=self.search_var, width=30)
         search_entry.pack(side=tk.LEFT, padx=5)
         
-        ttk.Button(search_frame, text="Очистить", command=lambda: self.search_var.set("")).pack(side=tk.LEFT, padx=2)
-        
-        # Кнопки фильтрации
-        ttk.Separator(search_frame, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=10)
-        ttk.Label(search_frame, text="Фильтр:").pack(side=tk.LEFT, padx=5)
-        
-        self.filter_var = tk.StringVar(value="all")
-        filter_combo = ttk.Combobox(
-            search_frame, 
-            textvariable=self.filter_var,
-            values=["all", "Полный", "Неполный", "Отсутствует"],
-            state="readonly",
-            width=15
-        )
-        filter_combo.pack(side=tk.LEFT, padx=5)
-        filter_combo.bind("<<ComboboxSelected>>", lambda e: self.apply_filter())
-        
         # Основная область с результатами
-        main_frame = ttk.Frame(self.root, padding="10")
-        main_frame.pack(fill=tk.BOTH, expand=True)
+        self.main_frame = tk.Frame(self.root)
+        self.main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
         # Вкладки для категорий
-        self.notebook = ttk.Notebook(main_frame)
+        self.notebook = ttk.Notebook(self.main_frame)
         self.notebook.pack(fill=tk.BOTH, expand=True)
         
         # Вкладка "Полный перевод"
-        self.full_frame = ttk.Frame(self.notebook)
+        self.full_frame = tk.Frame(self.notebook)
         self.notebook.add(self.full_frame, text="[100%] Полный")
         self.full_tree = self.create_treeview(self.full_frame, ["Мод", "Ключи RU", "Ключи EN", "%"])
         
         # Вкладка "Неполный перевод"
-        self.partial_frame = ttk.Frame(self.notebook)
+        self.partial_frame = tk.Frame(self.notebook)
         self.notebook.add(self.partial_frame, text="[Частично] Неполный")
         self.partial_tree = self.create_treeview(self.partial_frame, ["Мод", "Ключи RU", "Ключи EN", "%", "Не хватает"])
         
         # Вкладка "Отсутствует"
-        self.missing_frame = ttk.Frame(self.notebook)
+        self.missing_frame = tk.Frame(self.notebook)
         self.notebook.add(self.missing_frame, text="[Нет] Отсутствует")
         self.missing_tree = self.create_treeview(self.missing_frame, ["Мод", "Ключи EN", "Причина"])
         
-        # Статус бар
-        self.status_frame = ttk.Frame(self.root, padding="10")
-        self.status_frame.pack(fill=tk.X)
+        # Статус бар - используем tk.Frame для поддержки смены цветов фона
+        self.status_frame = tk.Frame(self.root)
+        self.status_frame.pack(fill=tk.X, padx=10, pady=10)
         
-        self.status_label = ttk.Label(self.status_frame, text="Выберите папку с .jar файлами модов", foreground="gray")
+        # Начальный цвет статуса серый — но при смене темы будем учитывать self.status_color
+        self.status_label = tk.Label(self.status_frame, text="Выберите папку с .jar файлами модов", fg="gray")
         self.status_label.pack(side=tk.LEFT)
     
     def create_treeview(self, parent, columns):
@@ -739,12 +733,146 @@ class LocalizationCheckerGUI:
         self.status_label.config(text=message, foreground=color)
         self.root.after(timeout, lambda: self.set_status_message(self.status_message, self.status_color, True))
 
+    def toggle_theme(self):
+        """Переключает между светлой и тёмной темой."""
+        self.dark_mode = not self.dark_mode
+        
+        if self.dark_mode:
+            # Тёмная тема
+            dark_bg = "#1e1e1e"
+            dark_fg = "white"
+
+            self.root.config(bg=dark_bg)
+            self.theme_btn.config(text="☀️ Светлая тема")
+
+            # Обновляем цвета фреймов (tk.Frame поддерживает bg)
+            self.progress_frame.config(bg=dark_bg)
+            self.status_frame.config(bg=dark_bg)
+            # Верхние фреймы и область результатов
+            try:
+                self.top_frame.config(bg=dark_bg)
+            except Exception:
+                pass
+            try:
+                self.search_frame.config(bg=dark_bg)
+            except Exception:
+                pass
+            try:
+                self.main_frame.config(bg=dark_bg)
+            except Exception:
+                pass
+            try:
+                self.full_frame.config(bg=dark_bg)
+                self.partial_frame.config(bg=dark_bg)
+                self.missing_frame.config(bg=dark_bg)
+            except Exception:
+                pass
+
+            # Обновляем цвета лейблов
+            self.progress_label.config(bg=dark_bg, fg=dark_fg)
+            # Сохраняем и применяем текущий цвет статуса, если он есть
+            status_fg = self.status_color if getattr(self, 'status_color', None) else dark_fg
+            self.status_label.config(bg=dark_bg, fg=status_fg)
+
+            # Настраиваем стиль ttk виджетов для тёмной темы
+            try:
+                self.style.configure("Treeview", background=dark_bg, fieldbackground=dark_bg, foreground=dark_fg, borderwidth=0)
+                # Заголовки колонок - светлый фон и чёрный текст для читаемости
+                self.style.configure("Treeview.Heading", background="#e0e0e0", foreground="#000000", borderwidth=0)
+                self.style.configure("TNotebook", background=dark_bg)
+                # Вкладки - светлый фон и чёрный текст для читаемости
+                self.style.configure("TNotebook.Tab", background="#e0e0e0", foreground="#000000")
+                # Кнопки и комбобоксы - тёмный текст на светлом фоне для читаемости
+                self.style.configure("TButton", background="#e0e0e0", foreground="#000000", padding=5)
+                self.style.configure("TCombobox", background="#e0e0e0", foreground="#000000", fieldbackground="#ffffff")
+            except Exception:
+                pass
+            
+        else:
+            # Светлая тема
+            default_bg = "#f0f0f0"
+            default_fg = "black"
+
+            self.root.config(bg=default_bg)
+            self.theme_btn.config(text="🌙 Тёмная тема")
+
+            # Восстанавливаем стандартные цвета фреймов
+            self.progress_frame.config(bg=default_bg)
+            self.status_frame.config(bg=default_bg)
+            # Верхние фреймы и область результатов
+            try:
+                self.top_frame.config(bg=default_bg)
+            except Exception:
+                pass
+            try:
+                self.search_frame.config(bg=default_bg)
+            except Exception:
+                pass
+            try:
+                self.main_frame.config(bg=default_bg)
+            except Exception:
+                pass
+            try:
+                self.full_frame.config(bg=default_bg)
+                self.partial_frame.config(bg=default_bg)
+                self.missing_frame.config(bg=default_bg)
+            except Exception:
+                pass
+
+            # Восстанавливаем цвета лейблов
+            self.progress_label.config(bg=default_bg, fg=default_fg)
+            # В light режиме показываем статус тем цветом, который хранится в status_color (по умолчанию черный/green)
+            status_fg = self.status_color if getattr(self, 'status_color', None) else default_fg
+            self.status_label.config(bg=default_bg, fg=status_fg)
+
+            # Сброс стилей ttk к светлым значениям
+            try:
+                self.style.configure("Treeview", background="white", fieldbackground="white", foreground="black", borderwidth=0)
+                self.style.configure("Treeview.Heading", background="#e0e0e0", foreground="#000000", borderwidth=0)
+                self.style.configure("TNotebook", background=default_bg)
+                self.style.configure("TNotebook.Tab", background=default_bg, foreground="black")
+                # Кнопки и комбобоксы - стандартные цвета для светлой темы
+                self.style.configure("TButton", background="#e0e0e0", foreground="#000000", padding=5)
+                self.style.configure("TCombobox", background="#e0e0e0", foreground="#000000", fieldbackground="#ffffff")
+            except Exception:
+                pass
+        
+        # Пересоздаём теги для всех деревьев при смене темы
+        if self.results:
+            self.setup_tree_tags(self.full_tree)
+            self.setup_tree_tags(self.partial_tree)
+            self.setup_tree_tags(self.missing_tree)
+            # Пересоздаём результаты чтобы применить новые теги
+            self.apply_filter()
+
     def setup_tree_tags(self, tree):
         """Создает теги для раскрашивания строк по источнику перевода."""
         colors = CONFIG.get("row_colors", {})
-        tree.tag_configure("source_jar", background=colors.get("jar", "#d4f4dd"))
-        tree.tag_configure("source_translated_mods", background=colors.get("translated_mods", "#d1e7ff"))
-        tree.tag_configure("source_missing", background=colors.get("missing", "#ffe4e1"))
+        
+        # Использование светлых цветов (одинаковые для обеих тем)
+        jar_bg = colors.get("jar", "#d4f4dd")
+        translated_bg = colors.get("translated_mods", "#d1e7ff")
+        missing_bg = colors.get("missing", "#ffe4e1")
+        
+        # Фон поля дерева: тёмный в тёмной теме, белый в светлой
+        field_bg = "#1e1e1e" if self.dark_mode else "white"
+
+        # Применяем фон для области Treeview (чтобы убрать серые полосы в тёмной теме)
+        try:
+            tree.configure(background=field_bg, fieldbackground=field_bg)
+        except Exception:
+            pass
+
+        # Теги для строк всегда имеют чёрный текст (так как сами фоновые теги светлые)
+        tree.tag_configure("source_jar", background=jar_bg, foreground="black")
+        tree.tag_configure("source_translated_mods", background=translated_bg, foreground="black")
+        tree.tag_configure("source_missing", background=missing_bg, foreground="black")
+
+        # Заголовки колонок всегда с чёрным текстом на светлом фоне (#e0e0e0)
+        try:
+            self.style.configure("Treeview.Heading", background="#e0e0e0", foreground="#000000")
+        except Exception:
+            pass
 
     def copy_selected_mod_name(self, tree):
         """Копирует название мода из выделенной строки в буфер обмена."""
@@ -908,7 +1036,6 @@ class LocalizationCheckerGUI:
     def apply_filter(self):
         """Применяет фильтр поиска и сортировку к таблицам."""
         search_text = self.search_var.get().lower()
-        filter_type = self.filter_var.get()
         
         # Очищаем все таблицы
         for item in self.full_tree.get_children():
@@ -921,56 +1048,52 @@ class LocalizationCheckerGUI:
         if not self.results:
             return
         
-        # Показываем результаты в зависимости от фильтра
-        if filter_type in ("all", "Полный"):
-            # Фильтруем по поисковому тексту
-            full_filtered = [mod for mod in self.results["full"] 
-                           if search_text in mod["mod_name"].lower()]
-            # Применяем сортировку
-            sort_col = self.sort_state["full"]["column"] or "Мод"
-            full_sorted = self.sort_results(full_filtered, sort_col, self.sort_state["full"]["reverse"])
-            
-            for mod in full_sorted:
-                self.full_tree.insert("", tk.END, values=(
-                    mod["mod_name"],
-                    mod["ru_keys"],
-                    mod["en_keys"],
-                    f"{mod['percentage']}%"
-                ), tags=(self.get_source_tag(mod.get("source", "none")),))
+        # Показываем результаты - Полный перевод
+        full_filtered = [mod for mod in self.results["full"] 
+                       if search_text in mod["mod_name"].lower()]
+        # Применяем сортировку
+        sort_col = self.sort_state["full"]["column"] or "Мод"
+        full_sorted = self.sort_results(full_filtered, sort_col, self.sort_state["full"]["reverse"])
         
-        if filter_type in ("all", "Неполный"):
-            # Фильтруем по поисковому тексту
-            partial_filtered = [mod for mod in self.results["partial"]
-                              if search_text in mod["mod_name"].lower()]
-            # Применяем сортировку
-            sort_col = self.sort_state["partial"]["column"] or "Мод"
-            partial_sorted = self.sort_results(partial_filtered, sort_col, self.sort_state["partial"]["reverse"])
-            
-            for mod in partial_sorted:
-                missing_count = len(mod["missing_keys"])
-                self.partial_tree.insert("", tk.END, values=(
-                    mod["mod_name"],
-                    mod["ru_keys"],
-                    mod["en_keys"],
-                    f"{mod['percentage']}%",
-                    f"{missing_count} ключей"
-                ), tags=(self.get_source_tag(mod.get("source", "none")),))
+        for mod in full_sorted:
+            self.full_tree.insert("", tk.END, values=(
+                mod["mod_name"],
+                mod["ru_keys"],
+                mod["en_keys"],
+                f"{mod['percentage']}%"
+            ), tags=(self.get_source_tag(mod.get("source", "none")),))
         
-        if filter_type in ("all", "Отсутствует"):
-            # Фильтруем по поисковому тексту
-            missing_filtered = [mod for mod in self.results["missing"]
-                              if search_text in mod["mod_name"].lower()]
-            # Применяем сортировку
-            sort_col = self.sort_state["missing"]["column"] or "Мод"
-            missing_sorted = self.sort_results(missing_filtered, sort_col, self.sort_state["missing"]["reverse"])
-            
-            for mod in missing_sorted:
-                reason = mod.get("error", "Нет ru_ru.json")
-                self.missing_tree.insert("", tk.END, values=(
-                    mod["mod_name"],
-                    mod["en_keys"],
-                    reason
-                ), tags=(self.get_source_tag(mod.get("source", "none")),))
+        # Показываем результаты - Неполный перевод
+        partial_filtered = [mod for mod in self.results["partial"]
+                          if search_text in mod["mod_name"].lower()]
+        # Применяем сортировку
+        sort_col = self.sort_state["partial"]["column"] or "Мод"
+        partial_sorted = self.sort_results(partial_filtered, sort_col, self.sort_state["partial"]["reverse"])
+        
+        for mod in partial_sorted:
+            missing_count = len(mod["missing_keys"])
+            self.partial_tree.insert("", tk.END, values=(
+                mod["mod_name"],
+                mod["ru_keys"],
+                mod["en_keys"],
+                f"{mod['percentage']}%",
+                f"{missing_count} ключей"
+            ), tags=(self.get_source_tag(mod.get("source", "none")),))
+        
+        # Показываем результаты - Отсутствует
+        missing_filtered = [mod for mod in self.results["missing"]
+                          if search_text in mod["mod_name"].lower()]
+        # Применяем сортировку
+        sort_col = self.sort_state["missing"]["column"] or "Мод"
+        missing_sorted = self.sort_results(missing_filtered, sort_col, self.sort_state["missing"]["reverse"])
+        
+        for mod in missing_sorted:
+            reason = mod.get("error", "Нет ru_ru.json")
+            self.missing_tree.insert("", tk.END, values=(
+                mod["mod_name"],
+                mod["en_keys"],
+                reason
+            ), tags=(self.get_source_tag(mod.get("source", "none")),))
     
     def show_details(self, tree):
         """Показывает детали выбранного мода."""
@@ -1001,6 +1124,22 @@ class LocalizationCheckerGUI:
         
         text_widget = tk.Text(detail_window, wrap=tk.WORD, font=("Consolas", 10))
         text_widget.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+        # Применим тему к окну деталей
+        if self.dark_mode:
+            dark_bg = "#1e1e1e"
+            dark_fg = "white"
+            try:
+                detail_window.config(bg=dark_bg)
+                text_widget.config(bg=dark_bg, fg=dark_fg, insertbackground=dark_fg)
+            except Exception:
+                pass
+        else:
+            try:
+                detail_window.config(bg="#ffffff")
+                text_widget.config(bg="white", fg="black", insertbackground="black")
+            except Exception:
+                pass
         
         details = f"Мод: {mod_info['mod_name']}\n"
         details += f"Статус: {mod_info['status']}\n"
