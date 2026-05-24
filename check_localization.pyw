@@ -518,6 +518,7 @@ def check_jar_localization(jar_path: Path) -> Dict[str, Any]:
     
     # Перевода нет ни в .jar, ни в TranslatedMods
     result["status"] = "missing"
+    result["error"] = "Нет ru_ru.json"
     return result
 
 
@@ -600,6 +601,9 @@ class LocalizationCheckerGUI:
             "missing": {"column": None, "reverse": False}
         }
         
+        # Тема оформления (по умолчанию светлая)
+        self.dark_theme = False
+        
         self.setup_ui()
     
     def setup_ui(self):
@@ -616,6 +620,10 @@ class LocalizationCheckerGUI:
         
         self.export_btn = ttk.Button(top_frame, text="💾 Экспорт в JSON", command=self.export_results, state=tk.DISABLED)
         self.export_btn.pack(side=tk.LEFT, padx=5)
+        
+        # Кнопка переключения темы
+        self.theme_btn = ttk.Button(top_frame, text="🌙 Тёмная тема", command=self.toggle_theme)
+        self.theme_btn.pack(side=tk.RIGHT, padx=5)
         
         ttk.Button(top_frame, text="❌ Закрыть", command=self.root.quit).pack(side=tk.RIGHT, padx=5)
         
@@ -741,9 +749,92 @@ class LocalizationCheckerGUI:
     def setup_tree_tags(self, tree):
         """Создает теги для раскрашивания строк по источнику перевода."""
         colors = CONFIG.get("row_colors", {})
+        # Цвета источников перевода остаются неизменными в обеих темах
         tree.tag_configure("source_jar", background=colors.get("jar", "#d4f4dd"))
         tree.tag_configure("source_translated_mods", background=colors.get("translated_mods", "#d1e7ff"))
         tree.tag_configure("source_missing", background=colors.get("missing", "#ffe4e1"))
+    
+    def toggle_theme(self):
+        """Переключает тему оформления между светлой и тёмной."""
+        self.dark_theme = not self.dark_theme
+        
+        if self.dark_theme:
+            # Тёмная тема
+            bg_color = "#1e1e1e"
+            fg_color = "#ffffff"
+            frame_bg = "#2d2d2d"
+            tree_bg = "#252525"
+            tree_fg = "#ffffff"
+            button_style = "#3a3a3a"
+            status_bg = "#2d2d2d"
+            self.theme_btn.config(text="☀️ Светлая тема")
+        else:
+            # Светлая тема
+            bg_color = "#f0f0f0"
+            fg_color = "#000000"
+            frame_bg = "#f0f0f0"
+            tree_bg = "#ffffff"
+            tree_fg = "#000000"
+            button_style = "#e1e1e1"
+            status_bg = "#f0f0f0"
+            self.theme_btn.config(text="🌙 Тёмная тема")
+        
+        # Применяем цвета к основному окну
+        self.root.configure(bg=bg_color)
+        
+        # Применяем цвета ко всем фреймам
+        for widget in self.root.winfo_children():
+            self._apply_theme_to_widget(widget, bg_color, fg_color, frame_bg, tree_bg, tree_fg, button_style, status_bg)
+    
+    def _apply_theme_to_widget(self, widget, bg_color, fg_color, frame_bg, tree_bg, tree_fg, button_style, status_bg):
+        """Рекурсивно применяет тему к виджету и всем его дочерним элементам."""
+        try:
+            widget_type = widget.winfo_class()
+            
+            if widget_type in ("Frame", "Labelframe", "TFrame"):
+                widget.configure(style="TFrame")
+                # Для Treeview родительских фреймов
+                if hasattr(widget, 'children'):
+                    for child in widget.winfo_children():
+                        self._apply_theme_to_widget(child, bg_color, fg_color, frame_bg, tree_bg, tree_fg, button_style, status_bg)
+            
+            elif widget_type == "TLabel":
+                widget.configure(background=bg_color, foreground=fg_color)
+            
+            elif widget_type == "TButton":
+                widget.configure(style="TButton")
+            
+            elif widget_type == "TProgressbar":
+                widget.configure(style="TProgressbar")
+            
+            elif widget_type == "Treeview":
+                widget.configure(background=tree_bg, foreground=tree_fg)
+                # Обновляем цвета заголовков
+                style = ttk.Style()
+                style.configure("Treeview.Heading", background=frame_bg, foreground=fg_color)
+                style.map("Treeview.Heading", 
+                         background=[('active', '#4a4a4a' if self.dark_theme else '#d0d0d0')],
+                         foreground=[('active', fg_color)])
+            
+            elif widget_type == "TEntry":
+                widget.configure(background=tree_bg, foreground=fg_color, insertbackground=fg_color)
+            
+            elif widget_type == "TCombobox":
+                widget.configure(background=tree_bg, foreground=fg_color)
+            
+            elif widget_type == "TLabelframe":
+                widget.configure(style="TLabelframe")
+                widget.labelconfigure(foreground=fg_color)
+        
+        except Exception:
+            pass  # Игнорируем ошибки для виджетов, которые не поддерживают определенные параметры
+        
+        # Рекурсивно обрабатываем дочерние виджеты
+        try:
+            for child in widget.winfo_children():
+                self._apply_theme_to_widget(child, bg_color, fg_color, frame_bg, tree_bg, tree_fg, button_style, status_bg)
+        except Exception:
+            pass
 
     def copy_selected_mod_name(self, tree):
         """Копирует название мода из выделенной строки в буфер обмена."""
@@ -1065,6 +1156,10 @@ class LocalizationCheckerGUI:
 
 def main_gui():
     """Запускает графический интерфейс."""
+    if not GUI_AVAILABLE:
+        print("❌ Ошибка: tkinter не доступен. Установите python3-tk.")
+        return
+    
     load_config()  # Загружаем конфигурацию при запуске
     root = tk.Tk()
     app = LocalizationCheckerGUI(root)

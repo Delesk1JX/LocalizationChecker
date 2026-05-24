@@ -1,1 +1,1 @@
-(check_localization.py is a source file, and there are no build artifacts, dependencies, or temp files in the changes)
+Nothing should be ignored since the changes only include Python source files (.py and .pyw) which are source code files.
