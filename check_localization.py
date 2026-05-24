@@ -755,19 +755,76 @@ class LocalizationCheckerGUI:
         tree.tag_configure("source_translated_mods", background=colors.get("translated_mods", "#d1e7ff"))
         tree.tag_configure("source_missing", background=colors.get("missing", "#ffe4e1"))
 
+    def update_tree_colors(self):
+        """Обновляет цвета строк таблицы в зависимости от текущей темы."""
+        if self.dark_mode:
+            # Тёмные цвета для тёмной темы
+            tree_colors = {
+                "jar": "#2d5a3d",
+                "translated_mods": "#2d4a5a",
+                "missing": "#5a3d3d"
+            }
+        else:
+            # Светлые цвета для светлой темы
+            tree_colors = CONFIG.get("row_colors", {
+                "jar": "#d4f4dd",
+                "translated_mods": "#d1e7ff",
+                "missing": "#ffe4e1"
+            })
+        
+        for tree in [self.full_tree, self.partial_tree, self.missing_tree]:
+            tree.tag_configure("source_jar", background=tree_colors.get("jar", "#d4f4dd"))
+            tree.tag_configure("source_translated_mods", background=tree_colors.get("translated_mods", "#d1e7ff"))
+            tree.tag_configure("source_missing", background=tree_colors.get("missing", "#ffe4e1"))
+
     def toggle_theme(self):
         """Переключает тему оформления (светлая/тёмная)."""
         self.dark_mode = not self.dark_mode
         
         if self.dark_mode:
             bg_color = self.dark_bg
+            fg_color = "#ffffff"
             self.theme_btn.config(text="☀️ Светлая тема")
         else:
             bg_color = self.light_bg
+            fg_color = "#000000"
             self.theme_btn.config(text="🌙 Тёмная тема")
         
-        # Меняем только фон главного окна
+        # Меняем фон главного окна
         self.root.configure(bg=bg_color)
+        
+        # Обновляем стиль ttk для тёмной темы
+        style = ttk.Style()
+        if self.dark_mode:
+            style.theme_use('clam')
+            style.configure('.', background=bg_color, foreground=fg_color)
+            style.configure('TFrame', background=bg_color)
+            style.configure('TLabel', background=bg_color, foreground=fg_color)
+            style.configure('TButton', background=bg_color, foreground=fg_color)
+            style.configure('Treeview', background=bg_color, foreground=fg_color, fieldbackground=bg_color)
+            style.configure('Treeview.Heading', background=bg_color, foreground=fg_color)
+            style.configure('TNotebook', background=bg_color, foreground=fg_color)
+            style.configure('TNotebook.Tab', background=bg_color, foreground=fg_color)
+            style.configure('TProgressbar', background=bg_color, troughcolor=bg_color)
+            style.configure('Horizontal.TSeparator', background=fg_color)
+        else:
+            style.theme_use('clam')
+            style.configure('.', background=bg_color, foreground=fg_color)
+            style.configure('TFrame', background=bg_color)
+            style.configure('TLabel', background=bg_color, foreground=fg_color)
+            style.configure('TButton', background=bg_color, foreground=fg_color)
+            style.configure('Treeview', background=bg_color, foreground=fg_color, fieldbackground=bg_color)
+            style.configure('Treeview.Heading', background=bg_color, foreground=fg_color)
+            style.configure('TNotebook', background=bg_color, foreground=fg_color)
+            style.configure('TNotebook.Tab', background=bg_color, foreground=fg_color)
+            style.configure('TProgressbar', background=bg_color, troughcolor=bg_color)
+            style.configure('Horizontal.TSeparator', background="#000000")
+        
+        # Обновляем цвета тегов для строк таблицы (чтобы они были видны на тёмном фоне)
+        self.update_tree_colors()
+        
+        # Принудительно обновляем все виджеты
+        self.root.update_idletasks()
 
     def copy_selected_mod_name(self, tree):
         """Копирует название мода из выделенной строки в буфер обмена."""

@@ -1,4 +1,1 @@
-```
-__pycache__/
-*.pyc
-```
+Nothing should be ignored since only Python source files (.py and .pyw) were modified, which are source code files that should be tracked in version control.
