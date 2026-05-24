@@ -777,8 +777,8 @@ class LocalizationCheckerGUI:
             # Настраиваем стиль ttk виджетов для тёмной темы
             try:
                 self.style.configure("Treeview", background=dark_bg, fieldbackground=dark_bg, foreground=dark_fg, borderwidth=0)
-                # Заголовки колонок - светлый фон и чёрный текст для читаемости
-                self.style.configure("Treeview.Heading", background="#e0e0e0", foreground="#000000", borderwidth=0)
+                # Заголовки колонок - чёрный фон и белый текст для тёмной темы
+                self.style.configure("Treeview.Heading", background="#1e1e1e", foreground="#ffffff", borderwidth=0)
                 self.style.configure("TNotebook", background=dark_bg)
                 # Вкладки - светлый фон и чёрный текст для читаемости
                 self.style.configure("TNotebook.Tab", background="#e0e0e0", foreground="#000000")
@@ -868,9 +868,12 @@ class LocalizationCheckerGUI:
         tree.tag_configure("source_translated_mods", background=translated_bg, foreground="black")
         tree.tag_configure("source_missing", background=missing_bg, foreground="black")
 
-        # Заголовки колонок всегда с чёрным текстом на светлом фоне (#e0e0e0)
+        # Заголовки колонок: тёмная тема - чёрный фон/белый текст, светлая - светлый фон/чёрный текст
         try:
-            self.style.configure("Treeview.Heading", background="#e0e0e0", foreground="#000000")
+            if self.dark_mode:
+                self.style.configure("Treeview.Heading", background="#1e1e1e", foreground="#ffffff")
+            else:
+                self.style.configure("Treeview.Heading", background="#e0e0e0", foreground="#000000")
         except Exception:
             pass
 
