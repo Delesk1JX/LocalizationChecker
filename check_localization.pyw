@@ -518,6 +518,7 @@ def check_jar_localization(jar_path: Path) -> Dict[str, Any]:
     
     # Перевода нет ни в .jar, ни в TranslatedMods
     result["status"] = "missing"
+    result["error"] = "Нет ru_ru.json"
     return result
 
 
