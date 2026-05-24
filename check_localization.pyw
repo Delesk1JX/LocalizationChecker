@@ -589,6 +589,49 @@ class LocalizationCheckerGUI:
         self.root.geometry("900x700")
         self.root.minsize(800, 600)
         
+        # Настройка стилей для улучшения читаемости на тёмной теме
+        self.style = ttk.Style()
+        # Настраиваем стиль кнопок - тёмный текст на светлом фоне
+        self.style.configure('TButton', 
+                            foreground='#000000', 
+                            background='#e1e1e1',
+                            font=('Segoe UI', 9))
+        self.style.map('TButton',
+                      foreground=[('pressed', '#000000'), ('active', '#000000')],
+                      background=[('pressed', '#c0c0c0'), ('active', '#f0f0f0')])
+        # Настраиваем стиль Combobox для фильтров
+        self.style.configure('TCombobox',
+                            foreground='#000000',
+                            fieldbackground='#ffffff',
+                            font=('Segoe UI', 9))
+        self.style.map('TCombobox',
+                      foreground=[('pressed', '#000000'), ('active', '#000000')],
+                      fieldbackground=[('readonly', '#ffffff')],
+                      background=[('readonly', '#e1e1e1')])
+        # Настраиваем стиль Label
+        self.style.configure('TLabel',
+                            foreground='#000000',
+                            font=('Segoe UI', 9))
+        # Настраиваем стиль Notebook (вкладки)
+        self.style.configure('TNotebook.Tab',
+                            foreground='#000000',
+                            background='#e1e1e1',
+                            font=('Segoe UI', 9, 'bold'))
+        self.style.map('TNotebook.Tab',
+                      foreground=[('selected', '#000000')],
+                      background=[('selected', '#f0f0f0')])
+        # Настраиваем стиль Treeview
+        self.style.configure('Treeview',
+                            foreground='#000000',
+                            background='#ffffff',
+                            fieldbackground='#ffffff')
+        self.style.configure('Treeview.Heading',
+                            foreground='#000000',
+                            background='#e1e1e1')
+        self.style.map('Treeview.Heading',
+                      foreground=[('pressed', '#000000'), ('active', '#000000')],
+                      background=[('pressed', '#c0c0c0'), ('active', '#f0f0f0')])
+        
         self.current_path = None
         self.results = None
         self.status_message = ""

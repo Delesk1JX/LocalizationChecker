@@ -779,7 +779,11 @@ class LocalizationCheckerGUI:
                 self.style.configure("Treeview", background=dark_bg, fieldbackground=dark_bg, foreground=dark_fg, borderwidth=0)
                 self.style.configure("Treeview.Heading", background="#2e2e2e", foreground=dark_fg, borderwidth=0)
                 self.style.configure("TNotebook", background=dark_bg)
-                self.style.configure("TNotebook.Tab", background="#2b2b2b", foreground=dark_fg)
+                # Вкладки - светлый фон и чёрный текст для читаемости
+                self.style.configure("TNotebook.Tab", background="#e0e0e0", foreground="#000000")
+                # Кнопки и комбобоксы - тёмный текст на светлом фоне для читаемости
+                self.style.configure("TButton", background="#e0e0e0", foreground="#000000", padding=5)
+                self.style.configure("TCombobox", background="#e0e0e0", foreground="#000000", fieldbackground="#ffffff")
             except Exception:
                 pass
             
@@ -826,6 +830,9 @@ class LocalizationCheckerGUI:
                 self.style.configure("Treeview.Heading", background="#f0f0f0", foreground="black", borderwidth=0)
                 self.style.configure("TNotebook", background=default_bg)
                 self.style.configure("TNotebook.Tab", background=default_bg, foreground="black")
+                # Кнопки и комбобоксы - стандартные цвета для светлой темы
+                self.style.configure("TButton", background="#e0e0e0", foreground="#000000", padding=5)
+                self.style.configure("TCombobox", background="#e0e0e0", foreground="#000000", fieldbackground="#ffffff")
             except Exception:
                 pass
         
