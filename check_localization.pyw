@@ -765,8 +765,14 @@ class LocalizationCheckerGUI:
             frame_bg = "#2d2d2d"
             tree_bg = "#252525"
             tree_fg = "#ffffff"
-            button_style = "#3a3a3a"
+            button_bg = "#3a3a3a"
+            button_fg = "#ffffff"
             status_bg = "#2d2d2d"
+            entry_bg = "#2d2d2d"
+            entry_fg = "#ffffff"
+            header_bg = "#3a3a3a"
+            header_fg = "#ffffff"
+            header_active_bg = "#4a4a4a"
             self.theme_btn.config(text="☀️ Светлая тема")
         else:
             # Светлая тема
@@ -775,31 +781,86 @@ class LocalizationCheckerGUI:
             frame_bg = "#f0f0f0"
             tree_bg = "#ffffff"
             tree_fg = "#000000"
-            button_style = "#e1e1e1"
+            button_bg = "#e1e1e1"
+            button_fg = "#000000"
             status_bg = "#f0f0f0"
+            entry_bg = "#ffffff"
+            entry_fg = "#000000"
+            header_bg = "#f0f0f0"
+            header_fg = "#000000"
+            header_active_bg = "#d0d0d0"
             self.theme_btn.config(text="🌙 Тёмная тема")
+        
+        # Настраиваем стили ttk
+        style = ttk.Style()
+        
+        # Стили для TFrame
+        style.configure("TFrame", background=frame_bg)
+        
+        # Стили для TLabel
+        style.configure("TLabel", background=frame_bg, foreground=fg_color)
+        
+        # Стили для TButton
+        style.configure("TButton", background=button_bg, foreground=button_fg)
+        style.map("TButton",
+                  background=[('active', '#4a4a4a' if self.dark_theme else '#d0d0d0')],
+                  foreground=[('active', button_fg)])
+        
+        # Стили для TProgressbar
+        style.configure("TProgressbar", background=button_bg, troughcolor=frame_bg)
+        
+        # Стили для Treeview
+        style.configure("Treeview", background=tree_bg, foreground=tree_fg, fieldbackground=tree_bg)
+        style.configure("Treeview.Heading", background=header_bg, foreground=header_fg)
+        style.map("Treeview.Heading",
+                  background=[('active', header_active_bg)],
+                  foreground=[('active', header_fg)])
+        
+        # Стили для TEntry
+        style.configure("TEntry", fieldbackground=entry_bg, foreground=entry_fg, insertcolor=fg_color)
+        
+        # Стили для TCombobox
+        style.configure("TCombobox", fieldbackground=entry_bg, foreground=entry_fg)
+        style.map("TCombobox",
+                  fieldbackground=[('readonly', entry_bg)],
+                  selectbackground=[('readonly', button_bg)],
+                  selectforeground=[('readonly', button_fg)])
+        
+        # Стили для Notebook
+        style.configure("TNotebook", background=frame_bg)
+        style.configure("TNotebook.Tab", background=button_bg, foreground=fg_color)
+        style.map("TNotebook.Tab",
+                  background=[('selected', frame_bg)],
+                  foreground=[('selected', fg_color)])
+        
+        # Стили для TLabelframe
+        style.configure("TLabelframe", background=frame_bg, foreground=fg_color)
+        style.configure("TLabelframe.Label", background=frame_bg, foreground=fg_color)
         
         # Применяем цвета к основному окну
         self.root.configure(bg=bg_color)
         
-        # Применяем цвета ко всем фреймам
+        # Применяем цвета ко всем фреймам и виджетам
         for widget in self.root.winfo_children():
-            self._apply_theme_to_widget(widget, bg_color, fg_color, frame_bg, tree_bg, tree_fg, button_style, status_bg)
+            self._apply_theme_to_widget(widget, bg_color, fg_color, frame_bg, tree_bg, tree_fg, 
+                                        button_bg, button_fg, status_bg, entry_bg, entry_fg)
     
-    def _apply_theme_to_widget(self, widget, bg_color, fg_color, frame_bg, tree_bg, tree_fg, button_style, status_bg):
+    def _apply_theme_to_widget(self, widget, bg_color, fg_color, frame_bg, tree_bg, tree_fg, 
+                                button_bg, button_fg, status_bg, entry_bg, entry_fg):
         """Рекурсивно применяет тему к виджету и всем его дочерним элементам."""
         try:
             widget_type = widget.winfo_class()
             
             if widget_type in ("Frame", "Labelframe", "TFrame"):
-                widget.configure(style="TFrame")
+                widget.configure(background=frame_bg)
                 # Для Treeview родительских фреймов
                 if hasattr(widget, 'children'):
                     for child in widget.winfo_children():
-                        self._apply_theme_to_widget(child, bg_color, fg_color, frame_bg, tree_bg, tree_fg, button_style, status_bg)
+                        self._apply_theme_to_widget(child, bg_color, fg_color, frame_bg, tree_bg, tree_fg,
+                                                    button_bg, button_fg, status_bg, entry_bg, entry_fg)
             
             elif widget_type == "TLabel":
-                widget.configure(background=bg_color, foreground=fg_color)
+                widget.configure(background=frame_bg, foreground=fg_color)
             
             elif widget_type == "TButton":
                 widget.configure(style="TButton")
@@ -809,22 +870,20 @@ class LocalizationCheckerGUI:
             
             elif widget_type == "Treeview":
                 widget.configure(background=tree_bg, foreground=tree_fg)
-                # Обновляем цвета заголовков
-                style = ttk.Style()
-                style.configure("Treeview.Heading", background=frame_bg, foreground=fg_color)
-                style.map("Treeview.Heading", 
-                         background=[('active', '#4a4a4a' if self.dark_theme else '#d0d0d0')],
-                         foreground=[('active', fg_color)])
+                # Обновляем цвета заголовков через style уже настроен в toggle_theme
             
             elif widget_type == "TEntry":
-                widget.configure(background=tree_bg, foreground=fg_color, insertbackground=fg_color)
+                widget.configure(background=entry_bg, foreground=entry_fg, insertbackground=fg_color)
             
             elif widget_type == "TCombobox":
-                widget.configure(background=tree_bg, foreground=fg_color)
+                widget.configure(background=entry_bg, foreground=entry_fg)
             
             elif widget_type == "TLabelframe":
                 widget.configure(style="TLabelframe")
                 widget.labelconfigure(foreground=fg_color)
+            
+            elif widget_type == "TNotebook":
+                widget.configure(style="TNotebook")
         
         except Exception:
             pass  # Игнорируем ошибки для виджетов, которые не поддерживают определенные параметры
@@ -832,7 +891,8 @@ class LocalizationCheckerGUI:
         # Рекурсивно обрабатываем дочерние виджеты
         try:
             for child in widget.winfo_children():
-                self._apply_theme_to_widget(child, bg_color, fg_color, frame_bg, tree_bg, tree_fg, button_style, status_bg)
+                self._apply_theme_to_widget(child, bg_color, fg_color, frame_bg, tree_bg, tree_fg,
+                                            button_bg, button_fg, status_bg, entry_bg, entry_fg)
         except Exception:
             pass
 
