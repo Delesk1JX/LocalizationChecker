@@ -1,17 +1,22 @@
 #!/usr/bin/env python3
 """
 Программа для проверки русской локализации в модах Minecraft.
-Работает напрямую с .jar файлами, проверяет наличие ru_ru.json и сравнивает ключи с en_us.json.
+Работает напрямую с .jar файлами, проверяет наличие ru_ru.json и .lang файлов,
+сравнивает ключи с en_us.json или en_US.lang.
 Также поддерживает проверку переводов в папке TranslatedMods.
 
+Поддерживаемые форматы:
+- JSON (Minecraft 1.13+): en_us.json, ru_ru.json
+- .lang (Minecraft 1.12.2 и ниже): en_US.lang, ru_RU.lang
+
 Категории:
-- Полный перевод: 100% совпадение ключей с en_us.json (все ключи из en_us есть в ru_ru)
-- Неполный перевод: есть ru_ru.json, но не все ключи из en_us присутствуют
-- Отсутствует: есть en_us.json, но нет ru_ru.json
+- Полный перевод: 100% совпадение ключей с английским файлом (все ключи из en есть в ru)
+- Неполный перевод: есть русский файл, но не все ключи из английского присутствуют
+- Отсутствует: есть английский файл, но нет русского
 
-Важно: Моды без файла en_us.json не учитываются при проверке.
+Важно: Моды без файла en_us.json/en_US.lang не учитываются при проверке.
 
-Лишние ключи в ru_ru.json (которых нет в en_us.json) сохраняются в отчете,
+Лишние ключи в русском файле (которых нет в английском) сохраняются в отчете,
 так как могут использоваться для обратной совместимости.
 """
 
@@ -158,21 +163,125 @@ def extract_json_from_file(file_path: Path) -> Optional[Dict[str, str]]:
         return None
 
 
+def parse_lang_file(file_path: Path) -> Optional[Dict[str, str]]:
+    """
+    Парсит файл локализации .lang (формат для Minecraft 1.12.2 и ниже).
+    
+    Формат файла:
+    # Комментарии начинаются с решетки
+    key=value
+    another.key=another value
+    
+    Args:
+        file_path: Путь к файлу .lang
+        
+    Returns:
+        Словарь с ключами локализации или None, если файл не найден/ошибка
+    """
+    try:
+        if not file_path.exists():
+            return None
+        
+        result = {}
+        # Используем utf-8-sig для корректной обработки BOM (Byte Order Mark)
+        with open(file_path, 'r', encoding='utf-8-sig') as f:
+            for line_num, line in enumerate(f, 1):
+                line = line.strip()
+                
+                # Пропускаем пустые строки и комментарии
+                if not line or line.startswith('#'):
+                    continue
+                
+                # Ищем первое вхождение '=' для разделения ключа и значения
+                if '=' in line:
+                    eq_index = line.index('=')
+                    key = line[:eq_index].strip()
+                    value = line[eq_index + 1:].strip()
+                    
+                    if key:  # Ключ не должен быть пустым
+                        result[key] = value
+                elif line:
+                    # Строка без '=' - возможно malformed, пропускаем с предупреждением
+                    print(f"⚠️  Пропущена строка {line_num} в {file_path}: нет разделителя '='")
+        
+        return result
+    except (UnicodeDecodeError, IOError) as e:
+        print(f"⚠️  Ошибка чтения {file_path}: {e}")
+        return None
+    except Exception as e:
+        print(f"⚠️  Неожиданная ошибка при чтении {file_path}: {e}")
+        return None
+
+
+def parse_lang_from_jar(jar_path: Path, lang_path: str) -> Optional[Dict[str, str]]:
+    """
+    Парсит файл локализации .lang из .jar архива.
+    
+    Args:
+        jar_path: Путь к .jar файлу
+        lang_path: Путь внутри архива (например, 'assets/modname/lang/en_US.lang')
+    
+    Returns:
+        Словарь с ключами локализации или None, если файл не найден/ошибка
+    """
+    try:
+        with zipfile.ZipFile(jar_path, 'r') as jar_file:
+            # Ищем файл внутри архива (регистронезависимый поиск пути)
+            actual_path = None
+            for name in jar_file.namelist():
+                if name.lower() == lang_path.lower():
+                    actual_path = name
+                    break
+            
+            if actual_path is None:
+                return None
+            
+            with jar_file.open(actual_path) as f:
+                # Используем utf-8-sig для корректной обработки BOM (Byte Order Mark)
+                content = f.read().decode('utf-8-sig')
+                
+                result = {}
+                for line_num, line in enumerate(content.splitlines(), 1):
+                    line = line.strip()
+                    
+                    # Пропускаем пустые строки и комментарии
+                    if not line or line.startswith('#'):
+                        continue
+                    
+                    # Ищем первое вхождение '=' для разделения ключа и значения
+                    if '=' in line:
+                        eq_index = line.index('=')
+                        key = line[:eq_index].strip()
+                        value = line[eq_index + 1:].strip()
+                        
+                        if key:  # Ключ не должен быть пустым
+                            result[key] = value
+                
+                return result
+    except (zipfile.BadZipFile, UnicodeDecodeError, KeyError) as e:
+        print(f"⚠️  Ошибка чтения {lang_path} из {jar_path}: {e}")
+        return None
+    except Exception as e:
+        print(f"⚠️  Неожиданная ошибка при чтении {jar_path}: {e}")
+        return None
+
+
 def find_ru_ru_in_translated_mods(mod_name: str) -> Optional[Path]:
     """
-    Ищет файл ru_ru.json для мода в папке TranslatedMods.
+    Ищет файл ru_ru.json или ru_RU.lang для мода в папке TranslatedMods.
     
     Структура TranslatedMods:
     TranslatedMods/
     ├── <название_мода>/
     │   └── lang/
-    │       └── ru_ru.json
+    │       ├── ru_ru.json (для новых версий Minecraft 1.13+)
+    │       └── ru_RU.lang (для старых версий Minecraft 1.12.2 и ниже)
     
     Args:
         mod_name: Название мода (извлеченное из assets внутри .jar файла)
         
     Returns:
-        Путь к файлу ru_ru.json или None если не найден
+        Путь к файлу локализации (.json или .lang) или None если не найден
     """
     if TRANSLATED_MODS_PATH is None:
         return None
@@ -184,9 +293,14 @@ def find_ru_ru_in_translated_mods(mod_name: str) -> Optional[Path]:
     for name in possible_names:
         mod_dir = TRANSLATED_MODS_PATH / name
         if mod_dir.exists() and mod_dir.is_dir():
+            # Сначала ищем ru_ru.json (новый формат)
             ru_ru_path = mod_dir / "lang" / "ru_ru.json"
             if ru_ru_path.exists():
                 return ru_ru_path
+            # Затем ищем ru_RU.lang (старый формат для 1.12.2 и ниже)
+            ru_lang_path = mod_dir / "lang" / "ru_RU.lang"
+            if ru_lang_path.exists():
+                return ru_lang_path
     
     # Если точное совпадение не найдено, ищем по более строгим правилам.
     # Избегаем ложных совпадений для очень коротких имен, например 'aq'.
@@ -197,9 +311,14 @@ def find_ru_ru_in_translated_mods(mod_name: str) -> Optional[Path]:
                 # Применяем правило только для длинных имен, чтобы не сопоставлять 'aq' с 'aquaculture'.
                 if len(mod_name) > 3 and len(item.name) > 3:
                     if mod_name.lower() in item.name.lower() or item.name.lower() in mod_name.lower():
+                        # Сначала ищем JSON
                         ru_ru_path = item / "lang" / "ru_ru.json"
                         if ru_ru_path.exists():
                             return ru_ru_path
+                        # Затем ищем .lang
+                        ru_lang_path = item / "lang" / "ru_RU.lang"
+                        if ru_lang_path.exists():
+                            return ru_lang_path
         
         # Дополнительная проверка: если имя папки является аббревиатурой или префиксом
         # Например, ali -> advancedlootinfo (a-l-i первые буквы слов)
@@ -215,18 +334,28 @@ def find_ru_ru_in_translated_mods(mod_name: str) -> Optional[Path]:
             abbrev = ''.join([w[0] for w in words if w])
             for item in TRANSLATED_MODS_PATH.iterdir():
                 if item.is_dir() and item.name.lower() == abbrev:
+                    # Сначала ищем JSON
                     ru_ru_path = item / "lang" / "ru_ru.json"
                     if ru_ru_path.exists():
                         return ru_ru_path
+                    # Затем ищем .lang
+                    ru_lang_path = item / "lang" / "ru_RU.lang"
+                    if ru_lang_path.exists():
+                        return ru_lang_path
         
         # Также проверяем, начинается ли mod_name с названия папки.
         # Но только для более длинных имен, чтобы избежать неправильных совпадений.
         for item in TRANSLATED_MODS_PATH.iterdir():
             if item.is_dir() and len(item.name) > 3 and len(mod_name) > 4:
                 if mod_name.lower().startswith(item.name.lower()):
+                    # Сначала ищем JSON
                     ru_ru_path = item / "lang" / "ru_ru.json"
                     if ru_ru_path.exists():
                         return ru_ru_path
+                    # Затем ищем .lang
+                    ru_lang_path = item / "lang" / "ru_RU.lang"
+                    if ru_lang_path.exists():
+                        return ru_lang_path
     
     return None
 
@@ -266,6 +395,7 @@ def extract_mod_name_from_assets(jar_path: Path) -> Optional[str]:
 def check_translated_mods_localization(jar_path: Path, en_data: Dict[str, str], en_us_path: str) -> Dict[str, Any]:
     """
     Проверяет наличие перевода для мода в папке TranslatedMods.
+    Поддерживает как .json (Minecraft 1.13+), так и .lang (Minecraft 1.12.2 и ниже) файлы.
     
     Args:
         jar_path: Путь к .jar файлу мода
@@ -297,17 +427,23 @@ def check_translated_mods_localization(jar_path: Path, en_data: Dict[str, str], 
         result["error"] = "Не удалось извлечь имя мода из assets"
         return result
     
-    # Ищем ru_ru.json в TranslatedMods используя имя мода из assets
-    ru_ru_path = find_ru_ru_in_translated_mods(mod_name)
+    # Ищем ru_ru.json или ru_RU.lang в TranslatedMods используя имя мода из assets
+    ru_path = find_ru_ru_in_translated_mods(mod_name)
     
-    if ru_ru_path is None:
+    if ru_path is None:
         return result
     
-    # Извлекаем данные из ru_ru.json
-    ru_data = extract_json_from_file(ru_ru_path)
+    # Определяем тип файла и извлекаем данные соответствующим парсером
+    if ru_path.suffix.lower() == '.json':
+        ru_data = extract_json_from_file(ru_path)
+    elif ru_path.suffix.lower() == '.lang':
+        ru_data = parse_lang_file(ru_path)
+    else:
+        result["error"] = f"Неподдерживаемый формат файла: {ru_path}"
+        return result
     
     if ru_data is None:
-        result["error"] = f"Не удалось прочитать {ru_ru_path}"
+        result["error"] = f"Не удалось прочитать {ru_path}"
         return result
     
     result["found"] = True
@@ -376,17 +512,19 @@ def extract_json_from_jar(jar_path: Path, lang_path: str) -> Optional[Dict[str, 
         return None
 
 
-def find_lang_files_in_jar(jar_path: Path) -> Tuple[Optional[str], Optional[str], bool]:
+def find_lang_files_in_jar(jar_path: Path) -> Tuple[Optional[str], Optional[str], Optional[str], bool, bool]:
     """
-    Ищет файлы en_us.json и ru_ru.json внутри .jar файла.
-    Проходит по всем файлам архива для обнаружения обоих языковых файлов.
+    Ищет файлы en_us.json, ru_ru.json и .lang файлы внутри .jar файла.
+    Проходит по всем файлам архива для обнаружения всех языковых файлов.
     
     Returns:
-        Tuple[путь_к_en_us, путь_к_ru_ru, есть ли папка lang] внутри архива
+        Tuple[путь_к_en_us, путь_к_ru_ru, путь_к_en_lang, есть ли папка lang, есть ли .lang файлы] внутри архива
     """
     en_us_path = None
     ru_ru_path = None
+    en_lang_path = None  # Для старых модов с en_US.lang
     has_lang_dir = False
+    has_lang_files = False
     
     try:
         with zipfile.ZipFile(jar_path, 'r') as jar_file:
@@ -399,25 +537,32 @@ def find_lang_files_in_jar(jar_path: Path) -> Tuple[Optional[str], Optional[str]
                 
                 has_lang_dir = True
                 
-                # Ищем файлы локализации
+                # Ищем файлы локализации JSON (Minecraft 1.13+)
                 if normalized.endswith('/lang/en_us.json'):
                     en_us_path = name
                 elif normalized.endswith('/lang/ru_ru.json'):
                     ru_ru_path = name
+                # Ищем файлы локализации .lang (Minecraft 1.12.2 и ниже)
+                elif normalized.endswith('/lang/en_us.lang') or normalized.endswith('/lang/en_us.lang'):
+                    en_lang_path = name
+                    has_lang_files = True
+                elif normalized.endswith('.lang'):
+                    has_lang_files = True
 
                 # Продолжаем поиск, даже если нашли один из файлов,
-                # чтобы обнаружить оба (и en_us, и ru_ru)
+                # чтобы обнаружить все форматы
     except zipfile.BadZipFile:
-        return (None, None, False)
+        return (None, None, None, False, False)
     
-    return (en_us_path, ru_ru_path, has_lang_dir)
+    return (en_us_path, ru_ru_path, en_lang_path, has_lang_dir, has_lang_files)
 
 
 def check_jar_localization(jar_path: Path) -> Dict[str, Any]:
     """
     Проверяет локализацию в одном .jar файле.
-    Сначала проверяет наличие ru_ru.json внутри .jar файла.
-    Если не найден, проверяет наличие перевода в папке TranslatedMods.
+    Поддерживает как JSON (Minecraft 1.13+), так и .lang (Minecraft 1.12.2 и ниже) форматы.
+    Сначала проверяет наличие перевода в папке TranslatedMods.
+    Если не найден, проверяет встроенные файлы локализации в .jar.
     
     Returns:
         Словарь с результатами проверки
@@ -435,7 +580,7 @@ def check_jar_localization(jar_path: Path) -> Dict[str, Any]:
     }
     
     # Находим пути к файлам внутри архива
-    en_us_path, ru_ru_path, has_lang_dir = find_lang_files_in_jar(jar_path)
+    en_us_path, ru_ru_path, en_lang_path, has_lang_dir, has_lang_files = find_lang_files_in_jar(jar_path)
     
     if not has_lang_dir:
         # Если в архиве нет папки lang, мод пропускаем и не включаем в отсутствующие
@@ -443,30 +588,38 @@ def check_jar_localization(jar_path: Path) -> Dict[str, Any]:
         result["error"] = "Папка lang не найдена в архиве (мод пропущен)"
         return result
     
-    if en_us_path is None:
-        # Если нет файла en_us.json, мод не учитывается
-        result["status"] = "skipped"
-        result["error"] = "Файл en_us.json не найден в архиве (мод пропущен)"
-        return result
+    # Определяем, какой файл использовать для английского текста
+    # Приоритет: en_us.json > en_US.lang
+    en_data = None
+    en_source = None
     
-    # Извлекаем en_us.json для сравнения
-    en_data = extract_json_from_jar(jar_path, en_us_path)
+    if en_us_path is not None:
+        en_data = extract_json_from_jar(jar_path, en_us_path)
+        en_source = en_us_path
+    
+    # Если en_us.json не найден или не прочитан, пробуем .lang файл
+    if en_data is None and en_lang_path is not None:
+        en_data = parse_lang_from_jar(jar_path, en_lang_path)
+        en_source = en_lang_path
+    
     if en_data is None:
-        result["error"] = "Не удалось прочитать en_us.json"
+        # Если нет файла en_us.json или en_US.lang, мод не учитывается
+        result["status"] = "skipped"
+        result["error"] = "Файл en_us.json/en_US.lang не найден в архиве (мод пропущен)"
         return result
     
     result["en_keys"] = len(en_data)
     
     if result["en_keys"] == 0:
-        # Если en_us.json есть, но не содержит ключей, мод не учитывается
+        # Если файл есть, но не содержит ключей, мод не учитывается
         result["status"] = "skipped"
-        result["error"] = "Файл en_us.json пустой (мод пропущен)"
+        result["error"] = "Файл en_us.json/en_US.lang пустой (мод пропущен)"
         return result
     
-    # Сначала проверяем ru_ru.json в папке TranslatedMods (если доступна)
+    # Сначала проверяем перевод в папке TranslatedMods (если доступна)
     # Это позволяет использовать актуальные переводы вместо устаревших из .jar
     if TRANSLATED_MODS_PATH is not None:
-        translated_mods_result = check_translated_mods_localization(jar_path, en_data, en_us_path)
+        translated_mods_result = check_translated_mods_localization(jar_path, en_data, en_us_path or en_lang_path)
         
         if translated_mods_result["found"]:
             result["source"] = "translated_mods"
@@ -484,12 +637,60 @@ def check_jar_localization(jar_path: Path) -> Dict[str, Any]:
             
             return result
     
-    # Если перевода нет в TranslatedMods, проверяем ru_ru.json внутри .jar файла
+    # Если перевода нет в TranslatedMods, проверяем встроенные файлы в .jar
+    # Сначала пробуем ru_ru.json
     if ru_ru_path is not None:
         ru_data = extract_json_from_jar(jar_path, ru_ru_path)
         
         if ru_data is not None:
-            # Есть встроенный перевод
+            # Есть встроенный перевод JSON
+            result["source"] = "jar"
+            en_keys_set = set(en_data.keys())
+            ru_keys_set = set(ru_data.keys())
+            
+            result["ru_keys"] = len(ru_keys_set)
+            
+            # Находим недостающие ключи
+            missing_keys = en_keys_set - ru_keys_set
+            extra_keys = ru_keys_set - en_keys_set
+            
+            result["missing_keys"] = sorted(list(missing_keys))
+            result["extra_keys"] = sorted(list(extra_keys))
+            
+            # Вычисляем процент
+            if result["en_keys"] == 0:
+                result["percentage"] = 0.0
+                result["status"] = "missing"
+            else:
+                present_keys = en_keys_set & ru_keys_set
+                result["percentage"] = round((len(present_keys) / result["en_keys"]) * 100, 2)
+                
+                if result["percentage"] == 100.0:
+                    result["status"] = "full"
+                else:
+                    result["status"] = "partial"
+            
+            return result
+    
+    # Если нет ru_ru.json, ищем ru_RU.lang внутри .jar
+    ru_lang_path = None
+    try:
+        with zipfile.ZipFile(jar_path, 'r') as jar_file:
+            for name in jar_file.namelist():
+                normalized = name.replace('\\', '/').lower()
+                if '/lang/' in normalized and normalized.endswith('.lang'):
+                    # Ищем русские варианты: ru_ru.lang, ru_RU.lang, ru-ru.lang
+                    if 'ru' in normalized:
+                        ru_lang_path = name
+                        break
+    except zipfile.BadZipFile:
+        pass
+    
+    if ru_lang_path is not None:
+        ru_data = parse_lang_from_jar(jar_path, ru_lang_path)
+        
+        if ru_data is not None:
+            # Есть встроенный перевод .lang
             result["source"] = "jar"
             en_keys_set = set(en_data.keys())
             ru_keys_set = set(ru_data.keys())
@@ -520,7 +721,7 @@ def check_jar_localization(jar_path: Path) -> Dict[str, Any]:
     
     # Перевода нет ни в .jar, ни в TranslatedMods
     result["status"] = "missing"
-    result["error"] = "Нет ru_ru.json"
+    result["error"] = "Нет ru_ru.json/ru_RU.lang"
     return result
 
 
