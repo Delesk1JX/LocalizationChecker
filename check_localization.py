@@ -777,7 +777,8 @@ class LocalizationCheckerGUI:
             # Настраиваем стиль ttk виджетов для тёмной темы
             try:
                 self.style.configure("Treeview", background=dark_bg, fieldbackground=dark_bg, foreground=dark_fg, borderwidth=0)
-                self.style.configure("Treeview.Heading", background="#2e2e2e", foreground=dark_fg, borderwidth=0)
+                # Заголовки колонок - светлый фон и чёрный текст для читаемости
+                self.style.configure("Treeview.Heading", background="#e0e0e0", foreground="#000000", borderwidth=0)
                 self.style.configure("TNotebook", background=dark_bg)
                 # Вкладки - светлый фон и чёрный текст для читаемости
                 self.style.configure("TNotebook.Tab", background="#e0e0e0", foreground="#000000")
@@ -827,7 +828,7 @@ class LocalizationCheckerGUI:
             # Сброс стилей ttk к светлым значениям
             try:
                 self.style.configure("Treeview", background="white", fieldbackground="white", foreground="black", borderwidth=0)
-                self.style.configure("Treeview.Heading", background="#f0f0f0", foreground="black", borderwidth=0)
+                self.style.configure("Treeview.Heading", background="#e0e0e0", foreground="#000000", borderwidth=0)
                 self.style.configure("TNotebook", background=default_bg)
                 self.style.configure("TNotebook.Tab", background=default_bg, foreground="black")
                 # Кнопки и комбобоксы - стандартные цвета для светлой темы
@@ -853,8 +854,7 @@ class LocalizationCheckerGUI:
         translated_bg = colors.get("translated_mods", "#d1e7ff")
         missing_bg = colors.get("missing", "#ffe4e1")
         
-        # Определяем цвета текста для заголовков и поля дерева
-        heading_fg = "white" if self.dark_mode else "black"
+        # Фон поля дерева: тёмный в тёмной теме, белый в светлой
         field_bg = "#1e1e1e" if self.dark_mode else "white"
 
         # Применяем фон для области Treeview (чтобы убрать серые полосы в тёмной теме)
@@ -868,9 +868,9 @@ class LocalizationCheckerGUI:
         tree.tag_configure("source_translated_mods", background=translated_bg, foreground="black")
         tree.tag_configure("source_missing", background=missing_bg, foreground="black")
 
-        # Обновляем заголовки через стиль
+        # Заголовки колонок всегда с чёрным текстом на светлом фоне (#e0e0e0)
         try:
-            self.style.configure("Treeview.Heading", foreground=heading_fg)
+            self.style.configure("Treeview.Heading", background="#e0e0e0", foreground="#000000")
         except Exception:
             pass
 
