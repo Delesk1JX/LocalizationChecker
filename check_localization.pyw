@@ -836,23 +836,48 @@ class LocalizationCheckerGUI:
         self.top_frame = tk.Frame(self.root)
         self.top_frame.pack(fill=tk.X, padx=10, pady=10)
         
-        self.select_btn = ttk.Button(self.top_frame, text="📁 Выбрать папку с модами", command=self.select_directory)
+        self.select_btn = ttk.Button(self.top_frame, text="📁 Выбрать папку с модами", command=self.select_directory, style="Custom.TButton")
         self.select_btn.pack(side=tk.LEFT, padx=5)
         
-        self.check_btn = ttk.Button(self.top_frame, text="▶️ Проверить", command=self.start_check, state=tk.DISABLED)
+        self.check_btn = ttk.Button(self.top_frame, text="▶️ Проверить", command=self.start_check, state=tk.DISABLED, style="Custom.TButton")
         self.check_btn.pack(side=tk.LEFT, padx=5)
         
-        self.export_btn = ttk.Button(self.top_frame, text="💾 Экспорт в JSON", command=self.export_results, state=tk.DISABLED)
+        self.export_btn = ttk.Button(self.top_frame, text="💾 Экспорт в JSON", command=self.export_results, state=tk.DISABLED, style="Custom.TButton")
         self.export_btn.pack(side=tk.LEFT, padx=5)
         
         # Кнопка переключения темы
-        self.theme_btn = ttk.Button(self.top_frame, text="🌙 Тёмная тема", command=self.toggle_theme)
+        self.theme_btn = ttk.Button(self.top_frame, text="🌙 Тёмная тема", command=self.toggle_theme, style="Custom.TButton")
         self.theme_btn.pack(side=tk.RIGHT, padx=5)
         
-        ttk.Button(self.top_frame, text="❌ Закрыть", command=self.root.quit).pack(side=tk.RIGHT, padx=5)
+        ttk.Button(self.top_frame, text="❌ Закрыть", command=self.root.quit, style="Custom.TButton").pack(side=tk.RIGHT, padx=5)
         
         # Стиль для виджетов ttk — будем менять для тёмной темы
         self.style = ttk.Style(self.root)
+        if "clam" in self.style.theme_names():
+            self.style.theme_use("clam")
+
+        self.style.configure("Custom.Treeview", background="white", fieldbackground="white", foreground="black", borderwidth=0)
+        self.style.configure("Custom.Treeview.Heading", background="#e0e0e0", foreground="black", borderwidth=0)
+        self.style.map("Custom.Treeview.Heading",
+            background=[('active', '#d0d0d0'), ('!active', '#e0e0e0')],
+            foreground=[('active', 'black'), ('!active', 'black')]
+        )
+        self.style.configure("Custom.TButton", background="#e0e0e0", foreground="black", padding=5)
+        self.style.map("Custom.TButton",
+            background=[('active', '#d0d0d0'), ('!disabled', '#e0e0e0')],
+            foreground=[('active', 'black'), ('!disabled', 'black')]
+        )
+        self.style.configure("Custom.Horizontal.TProgressbar", troughcolor="#e8e8e8", background="#28a028", bordercolor="#e8e8e8", lightcolor="#4cbf4c", darkcolor="#1c7c1c")
+        # Notebook/tab: выровнять фон вкладок и области клиента, убрать поля, чтобы не было "серой полосы"
+        self.style.configure("Custom.TNotebook", background="#f0f0f0", borderwidth=0, tabmargins=[2, 5, 2, 0])
+        self.style.configure("Custom.TNotebook.Tab", background="#f0f0f0", foreground="black", padding=10, borderwidth=0)
+        self.style.map("Custom.TNotebook.Tab",
+            background=[('selected', '#f0f0f0'), ('!selected', '#f0f0f0')],
+            foreground=[('selected', 'black'), ('!selected', '#999999')],
+            borderwidth=[('selected', 0), ('!selected', 0)]
+        )
+        self.style.configure("Custom.TEntry", fieldbackground="white", foreground="black", background="white")
+        self.style.configure("Custom.TCombobox", fieldbackground="white", foreground="black", background="#e0e0e0")
 
         # Панель прогресса - используем tk.Frame для поддержки смены цветов фона
         self.progress_frame = tk.Frame(self.root)
@@ -861,7 +886,7 @@ class LocalizationCheckerGUI:
         self.progress_label = tk.Label(self.progress_frame, text="Готов к работе")
         self.progress_label.pack(side=tk.LEFT, padx=5)
         
-        self.progress_bar = ttk.Progressbar(self.progress_frame, mode='determinate', length=400)
+        self.progress_bar = ttk.Progressbar(self.progress_frame, mode='determinate', length=400, style='Custom.Horizontal.TProgressbar')
         self.progress_bar.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
         
         # Панель поиска и фильтрации (используем tk.Frame чтобы можно было менять bg)
@@ -871,7 +896,7 @@ class LocalizationCheckerGUI:
         tk.Label(self.search_frame, text="🔍 Поиск по имени:").pack(side=tk.LEFT, padx=5)
         self.search_var = tk.StringVar()
         self.search_var.trace_add("write", self.on_search_change)
-        search_entry = ttk.Entry(self.search_frame, textvariable=self.search_var, width=30)
+        search_entry = ttk.Entry(self.search_frame, textvariable=self.search_var, width=30, style="Custom.TEntry")
         search_entry.pack(side=tk.LEFT, padx=5)
         
         # Основная область с результатами
@@ -879,7 +904,7 @@ class LocalizationCheckerGUI:
         self.main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
         # Вкладки для категорий
-        self.notebook = ttk.Notebook(self.main_frame)
+        self.notebook = ttk.Notebook(self.main_frame, style="Custom.TNotebook")
         self.notebook.pack(fill=tk.BOTH, expand=True)
         
         # Вкладка "Полный перевод"
@@ -907,7 +932,7 @@ class LocalizationCheckerGUI:
     
     def create_treeview(self, parent, columns):
         """Создает Treeview для отображения результатов."""
-        tree = ttk.Treeview(parent, columns=columns, show="headings", selectmode="browse")
+        tree = ttk.Treeview(parent, columns=columns, show="headings", selectmode="browse", style="Custom.Treeview")
         
         for col in columns:
             tree.heading(col, text=col, command=lambda c=col, t=tree: self.on_column_click(c, t))
@@ -1000,15 +1025,28 @@ class LocalizationCheckerGUI:
 
             # Настраиваем стиль ttk виджетов для тёмной темы
             try:
-                self.style.configure("Treeview", background=dark_bg, fieldbackground=dark_bg, foreground=dark_fg, borderwidth=0)
-                # Заголовки колонок - светлый фон и чёрный текст для читаемости
-                self.style.configure("Treeview.Heading", background="#e0e0e0", foreground="#000000", borderwidth=0)
-                self.style.configure("TNotebook", background=dark_bg)
-                # Вкладки - светлый фон и чёрный текст для читаемости
-                self.style.configure("TNotebook.Tab", background="#e0e0e0", foreground="#000000")
-                # Кнопки и комбобоксы - тёмный текст на светлом фоне для читаемости
-                self.style.configure("TButton", background="#e0e0e0", foreground="#000000", padding=5)
-                self.style.configure("TCombobox", background="#e0e0e0", foreground="#000000", fieldbackground="#ffffff")
+                self.style.configure("Custom.Treeview", background="#000000", fieldbackground="#000000", foreground=dark_fg, borderwidth=0)
+                self.style.configure("Custom.Treeview.Heading", background="#000000", foreground=dark_fg, borderwidth=0)
+                self.style.map("Custom.Treeview.Heading",
+                    background=[('active', '#1a1a1a'), ('!active', '#000000')],
+                    foreground=[('active', dark_fg), ('!active', dark_fg)]
+                )
+                # Notebook/tab: убрать разделительный светлый фон под вкладками
+                self.style.configure("Custom.TNotebook", background=dark_bg, tabmargins=[2, 5, 2, 0])
+                self.style.configure("Custom.TNotebook.Tab", background=dark_bg, foreground=dark_fg, padding=10, borderwidth=0)
+                self.style.map("Custom.TNotebook.Tab",
+                    background=[('selected', dark_bg), ('!selected', dark_bg)],
+                    foreground=[('selected', dark_fg), ('!selected', dark_fg)],
+                    borderwidth=[('selected', 0), ('!selected', 0)]
+                )
+                self.style.configure("Custom.TButton", background="#2f2f2f", foreground=dark_fg, padding=5)
+                self.style.map("Custom.TButton",
+                    background=[('active', '#393939'), ('!disabled', '#2f2f2f')],
+                    foreground=[('active', dark_fg), ('!disabled', dark_fg)]
+                )
+                self.style.configure("Custom.TEntry", fieldbackground="#1e1e1e", foreground=dark_fg, background="#1e1e1e")
+                self.style.configure("Custom.TCombobox", fieldbackground="#1e1e1e", foreground=dark_fg, background="#2f2f2f")
+                self.style.configure("Custom.Horizontal.TProgressbar", troughcolor="#2b2b2b", background="#28a028", bordercolor="#2b2b2b", lightcolor="#4cbf4c", darkcolor="#1c7c1c")
             except Exception:
                 pass
             
@@ -1051,13 +1089,28 @@ class LocalizationCheckerGUI:
 
             # Сброс стилей ttk к светлым значениям
             try:
-                self.style.configure("Treeview", background="white", fieldbackground="white", foreground="black", borderwidth=0)
-                self.style.configure("Treeview.Heading", background="#e0e0e0", foreground="#000000", borderwidth=0)
-                self.style.configure("TNotebook", background=default_bg)
-                self.style.configure("TNotebook.Tab", background=default_bg, foreground="black")
-                # Кнопки и комбобоксы - стандартные цвета для светлой темы
-                self.style.configure("TButton", background="#e0e0e0", foreground="#000000", padding=5)
-                self.style.configure("TCombobox", background="#e0e0e0", foreground="#000000", fieldbackground="#ffffff")
+                self.style.configure("Custom.Treeview", background="white", fieldbackground="white", foreground="black", borderwidth=0)
+                self.style.configure("Custom.Treeview.Heading", background="#e0e0e0", foreground="#000000", borderwidth=0)
+                self.style.map("Custom.Treeview.Heading",
+                    background=[('active', '#d0d0d0'), ('!active', '#e0e0e0')],
+                    foreground=[('active', 'black'), ('!active', 'black')]
+                )
+                # Notebook/tab: выровнять фон вкладок и области клиента в светлой теме
+                self.style.configure("Custom.TNotebook", background=default_bg, tabmargins=[2, 5, 2, 0])
+                self.style.configure("Custom.TNotebook.Tab", background=default_bg, foreground="black", padding=10, borderwidth=0)
+                self.style.map("Custom.TNotebook.Tab",
+                    background=[('selected', default_bg), ('!selected', default_bg)],
+                    foreground=[('selected', 'black'), ('!selected', 'black')],
+                    borderwidth=[('selected', 0), ('!selected', 0)]
+                )
+                self.style.configure("Custom.TButton", background="#e0e0e0", foreground="#000000", padding=5)
+                self.style.map("Custom.TButton",
+                    background=[('active', '#d0d0d0'), ('!disabled', '#e0e0e0')],
+                    foreground=[('active', 'black'), ('!disabled', 'black')]
+                )
+                self.style.configure("Custom.TEntry", fieldbackground="white", foreground="black", background="white")
+                self.style.configure("Custom.TCombobox", fieldbackground="#ffffff", foreground="#000000", background="#e0e0e0")
+                self.style.configure("Custom.Horizontal.TProgressbar", troughcolor="#e8e8e8", background="#28a028", bordercolor="#e8e8e8", lightcolor="#4cbf4c", darkcolor="#1c7c1c")
             except Exception:
                 pass
         
@@ -1092,9 +1145,11 @@ class LocalizationCheckerGUI:
         tree.tag_configure("source_translated_mods", background=translated_bg, foreground="black")
         tree.tag_configure("source_missing", background=missing_bg, foreground="black")
 
-        # Заголовки колонок всегда с чёрным текстом на светлом фоне (#e0e0e0)
+        # Заголовки колонок должны соответствовать текущей теме
+        heading_bg = "#000000" if self.dark_mode else "#e0e0e0"
+        heading_fg = "white" if self.dark_mode else "black"
         try:
-            self.style.configure("Treeview.Heading", background="#e0e0e0", foreground="#000000")
+            self.style.configure("Treeview.Heading", background=heading_bg, foreground=heading_fg)
         except Exception:
             pass
 
