@@ -5,8 +5,15 @@
   "show_statistics": true,
   "default_export_file": "localization_results.json",
   "row_colors": {
-    "jar": "#d4f4dd",
-    "translated_mods": "#d1e7ff",
-    "missing": "#ffe4e1"
+    "light": {
+      "jar": "#d4f4dd",
+      "translated_mods": "#9dcafa",
+      "missing": "#ffe4e1"
+    },
+    "dark": {
+      "jar": "#7d8a7d",
+      "translated_mods": "#5f738c",
+      "missing": "#b18a82"
+    }
   }
 }

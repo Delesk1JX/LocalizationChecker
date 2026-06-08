@@ -72,12 +72,42 @@ def load_config(config_file: str = "config.json") -> Dict[str, Any]:
                         if path.exists() and path.is_dir():
                             set_translated_mods_path(path)
                             break
-                # Гарантируем наличие секции row_colors
-                CONFIG.setdefault("row_colors", {
-                    "jar": "#d4f4dd",
-                    "translated_mods": "#d1e7ff",
-                    "missing": "#ffe4e1"
-                })
+                # Нормализуем секцию row_colors для поддержки светлой и тёмной темы
+                default_row_colors = {
+                    "light": {
+                        "jar": "#d4f4dd",
+                        "translated_mods": "#9dcafa",
+                        "missing": "#ffe4e1"
+                    },
+                    "dark": {
+                        "jar": "#7d8a7d",
+                        "translated_mods": "#5f738c",
+                        "missing": "#b18a82"
+                    }
+                }
+                row_colors = CONFIG.get("row_colors", {})
+                if isinstance(row_colors, dict) and any(key in row_colors for key in ("light", "dark")):
+                    CONFIG["row_colors"] = {
+                        "light": {
+                            "jar": row_colors.get("light", {}).get("jar", default_row_colors["light"]["jar"]),
+                            "translated_mods": row_colors.get("light", {}).get("translated_mods", default_row_colors["light"]["translated_mods"]),
+                            "missing": row_colors.get("light", {}).get("missing", default_row_colors["light"]["missing"])
+                        },
+                        "dark": {
+                            "jar": row_colors.get("dark", {}).get("jar", default_row_colors["dark"]["jar"]),
+                            "translated_mods": row_colors.get("dark", {}).get("translated_mods", default_row_colors["dark"]["translated_mods"]),
+                            "missing": row_colors.get("dark", {}).get("missing", default_row_colors["dark"]["missing"])
+                        }
+                    }
+                else:
+                    CONFIG["row_colors"] = {
+                        "light": {
+                            "jar": row_colors.get("jar", default_row_colors["light"]["jar"]),
+                            "translated_mods": row_colors.get("translated_mods", default_row_colors["light"]["translated_mods"]),
+                            "missing": row_colors.get("missing", default_row_colors["light"]["missing"])
+                        },
+                        "dark": default_row_colors["dark"]
+                    }
                 return CONFIG
     except Exception as e:
         print(f"⚠️  Ошибка загрузки конфига: {e}")
@@ -90,9 +120,16 @@ def load_config(config_file: str = "config.json") -> Dict[str, Any]:
         "show_statistics": True,
         "default_export_file": "localization_results.json",
         "row_colors": {
-            "jar": "#d4f4dd",
-            "translated_mods": "#d1e7ff",
-            "missing": "#ffe4e1"
+            "light": {
+                "jar": "#d4f4dd",
+                "translated_mods": "#9dcafa",
+                "missing": "#ffe4e1"
+            },
+            "dark": {
+                "jar": "#7d8a7d",
+                "translated_mods": "#5f738c",
+                "missing": "#b18a82"
+            }
         }
     }
     return CONFIG
@@ -102,6 +139,44 @@ def set_translated_mods_path(path: Optional[Path]):
     """Устанавливает путь к папке TranslatedMods."""
     global TRANSLATED_MODS_PATH
     TRANSLATED_MODS_PATH = path
+
+
+def get_row_colors(theme: str = "light") -> Dict[str, str]:
+    """Возвращает цвета строк для указанной темы."""
+    default_row_colors = {
+        "light": {
+            "jar": "#d4f4dd",
+            "translated_mods": "#9dcafa",
+            "missing": "#ffe4e1"
+        },
+        "dark": {
+            "jar": "#a2bca2",
+            "translated_mods": "#7c96b7",
+            "missing": "#d7b7b1"
+        }
+    }
+    row_colors = CONFIG.get("row_colors", {})
+    if not isinstance(row_colors, dict):
+        return default_row_colors.get(theme, default_row_colors["light"])
+
+    if "light" in row_colors or "dark" in row_colors:
+        theme_colors = row_colors.get(theme, {})
+        defaults = default_row_colors.get(theme, {})
+        return {
+            "jar": theme_colors.get("jar", defaults["jar"]),
+            "translated_mods": theme_colors.get("translated_mods", defaults["translated_mods"]),
+            "missing": theme_colors.get("missing", defaults["missing"])
+        }
+
+    # backward compatibility with top-level row_colors keys
+    if theme == "light":
+        return {
+            "jar": row_colors.get("jar", default_row_colors["light"]["jar"]),
+            "translated_mods": row_colors.get("translated_mods", default_row_colors["light"]["translated_mods"]),
+            "missing": row_colors.get("missing", default_row_colors["light"]["missing"])
+        }
+
+    return default_row_colors["dark"]
 
 
 def get_translated_mods_path() -> Optional[Path]:
@@ -1134,11 +1209,11 @@ class LocalizationCheckerGUI:
 
     def setup_tree_tags(self, tree):
         """Создает теги для раскрашивания строк по источнику перевода."""
-        colors = CONFIG.get("row_colors", {})
+        theme = "dark" if self.dark_mode else "light"
+        colors = get_row_colors(theme)
         
-        # Использование светлых цветов (одинаковые для обеих тем)
         jar_bg = colors.get("jar", "#d4f4dd")
-        translated_bg = colors.get("translated_mods", "#d1e7ff")
+        translated_bg = colors.get("translated_mods", "#9dcafa")
         missing_bg = colors.get("missing", "#ffe4e1")
         
         # Фон поля дерева: тёмный в тёмной теме, белый в светлой
