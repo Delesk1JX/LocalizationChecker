@@ -21,10 +21,13 @@
 """
 
 import os
+import sys
 import json
 import zipfile
 import argparse
 import threading
+import platform
+import subprocess
 from pathlib import Path
 from typing import Dict, List, Tuple, Any, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -41,6 +44,57 @@ except ImportError:
 # Глобальные переменные
 TRANSLATED_MODS_PATH: Optional[Path] = None
 CONFIG: Dict[str, Any] = {}
+
+
+def get_system_theme() -> str:
+    """Определяет системную тему: 'light' или 'dark'."""
+    try:
+        system = platform.system()
+        if system == "Windows":
+            try:
+                import winreg
+                with winreg.OpenKey(
+                    winreg.HKEY_CURRENT_USER,
+                    r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"
+                ) as key:
+                    value, _ = winreg.QueryValueEx(key, "AppsUseLightTheme")
+                    return "light" if value == 1 else "dark"
+            except Exception:
+                return "light"
+
+        if system == "Darwin":
+            try:
+                result = subprocess.run(
+                    ["defaults", "read", "-g", "AppleInterfaceStyle"],
+                    capture_output=True,
+                    text=True,
+                    check=False
+                )
+                if result.returncode == 0 and result.stdout.strip().lower() == "dark":
+                    return "dark"
+            except Exception:
+                pass
+            return "light"
+
+        if system == "Linux":
+            gtk_theme = os.environ.get("GTK_THEME", "").lower()
+            if "dark" in gtk_theme:
+                return "dark"
+            try:
+                result = subprocess.run(
+                    ["gsettings", "get", "org.gnome.desktop.interface", "color-scheme"],
+                    capture_output=True,
+                    text=True,
+                    check=False
+                )
+                if result.returncode == 0 and "dark" in result.stdout.lower():
+                    return "dark"
+            except Exception:
+                pass
+            return "light"
+    except Exception:
+        pass
+    return "light"
 
 
 def load_config(config_file: str = "config.json") -> Dict[str, Any]:
@@ -904,6 +958,8 @@ class LocalizationCheckerGUI:
         }
         
         self.setup_ui()
+        if get_system_theme() == "dark":
+            self.toggle_theme()
     
     def setup_ui(self):
         """Настройка пользовательского интерфейса."""
