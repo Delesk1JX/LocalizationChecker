@@ -968,7 +968,8 @@ class LocalizationCheckerGUI:
         self.search_frame = tk.Frame(self.root)
         self.search_frame.pack(fill=tk.X, padx=10, pady=10)
 
-        tk.Label(self.search_frame, text="🔍 Поиск по имени:").pack(side=tk.LEFT, padx=5)
+        self.search_label = tk.Label(self.search_frame, text="🔍 Поиск по имени:")
+        self.search_label.pack(side=tk.LEFT, padx=5)
         self.search_var = tk.StringVar()
         self.search_var.trace_add("write", self.on_search_change)
         search_entry = ttk.Entry(self.search_frame, textvariable=self.search_var, width=30, style="Custom.TEntry")
@@ -1092,6 +1093,10 @@ class LocalizationCheckerGUI:
             except Exception:
                 pass
             try:
+                self.search_label.config(bg=dark_bg, fg=dark_fg)
+            except Exception:
+                pass
+            try:
                 self.main_frame.config(bg=dark_bg)
             except Exception:
                 pass
@@ -1153,6 +1158,10 @@ class LocalizationCheckerGUI:
                 pass
             try:
                 self.search_frame.config(bg=default_bg)
+            except Exception:
+                pass
+            try:
+                self.search_label.config(bg=default_bg, fg="black")
             except Exception:
                 pass
             try:
