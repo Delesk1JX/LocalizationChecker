@@ -1492,7 +1492,28 @@ class LocalizationCheckerGUI:
         
         text_widget.insert(tk.END, details)
         text_widget.config(state=tk.DISABLED)
-    
+
+        # Разрешаем копирование выделенного текста через Ctrl+C в окне деталей
+        text_widget.bind("<Control-KeyPress>", lambda e, w=text_widget: self.on_copy_text_shortcut(e, w))
+
+    def on_copy_text_shortcut(self, event, text_widget):
+        """Обрабатывает Ctrl+C в окне деталей."""
+        if not (event.state & 0x4):
+            return None
+
+        if self.is_copy_shortcut(event):
+            try:
+                selection = text_widget.get(tk.SEL_FIRST, tk.SEL_LAST)
+            except tk.TclError:
+                return None
+
+            if selection:
+                self.root.clipboard_clear()
+                self.root.clipboard_append(selection)
+                self.show_temporary_status("Скопировано")
+                return "break"
+        return None
+
     def export_results(self):
         """Экспортирует результаты в JSON файл."""
         if not self.results:
