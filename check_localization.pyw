@@ -1283,12 +1283,12 @@ class LocalizationCheckerGUI:
                 set_translated_mods_path(translated_mods_path)
                 self.set_status_message(
                     f"Папка выбрана: {self.current_path} | TranslatedMods найден: {translated_mods_path}", 
-                    color="blue"
+                    color="green"
                 )
             else:
                 self.set_status_message(
                     f"Папка выбрана: {self.current_path} | TranslatedMods не найден", 
-                    color="orange"
+                    color="green"
                 )
     
     def update_progress(self, current, total):
@@ -1345,8 +1345,67 @@ class LocalizationCheckerGUI:
         )
         
         # Показываем сообщение о завершении
-        messagebox.showinfo("Готово", f"Проверено {total} модов (только с файлами локализации).\nРезультаты отображены во вкладках.\n\n💡 Подсказка: Нажимайте на заголовки столбцов для сортировки!")
+        self.show_info_dialog(
+            "Готово",
+            f"Проверено {total} модов (только с файлами локализации).\nРезультаты отображены во вкладках.\n\n💡 Подсказка: Нажимайте на заголовки столбцов для сортировки!"
+        )
     
+    def show_info_dialog(self, title: str, message: str):
+        """Показывает информационный диалог с поддержкой тёмной темы."""
+        dialog = tk.Toplevel(self.root)
+        dialog.title(title)
+        dialog.transient(self.root)
+        dialog.resizable(False, False)
+        dialog.grab_set()
+
+        bg_color = "#121212" if self.dark_mode else "#ffffff"
+        fg_color = "white" if self.dark_mode else "black"
+        btn_bg = "#2f2f2f" if self.dark_mode else "#e0e0e0"
+        btn_fg = "white" if self.dark_mode else "black"
+
+        try:
+            dialog.config(bg=bg_color)
+        except Exception:
+            pass
+
+        label = tk.Label(
+            dialog,
+            text=message,
+            bg=bg_color,
+            fg=fg_color,
+            justify=tk.LEFT,
+            wraplength=560,
+            padx=20,
+            pady=20
+        )
+        label.pack(fill=tk.BOTH, expand=True)
+
+        btn_frame = tk.Frame(dialog, bg=bg_color)
+        btn_frame.pack(fill=tk.X, pady=(0, 15))
+
+        ok_btn = tk.Button(
+            btn_frame,
+            text="OK",
+            command=dialog.destroy,
+            bg=btn_bg,
+            fg=btn_fg,
+            activebackground=btn_bg,
+            activeforeground=btn_fg,
+            relief=tk.FLAT,
+            padx=15,
+            pady=5
+        )
+        ok_btn.pack(side=tk.RIGHT, padx=20)
+
+        dialog.update_idletasks()
+        width = dialog.winfo_reqwidth()
+        height = dialog.winfo_reqheight()
+        x = self.root.winfo_rootx() + (self.root.winfo_width() - width) // 2
+        y = self.root.winfo_rooty() + (self.root.winfo_height() - height) // 2
+        dialog.geometry(f"{width}x{height}+{x}+{y}")
+
+        dialog.wait_window()
+
     def check_complete(self):
         """Завершение проверки."""
         self.check_btn.config(state=tk.NORMAL)
