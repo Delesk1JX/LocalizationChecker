@@ -921,6 +921,9 @@ class LocalizationCheckerGUI:
         self.missing_frame = tk.Frame(self.notebook)
         self.notebook.add(self.missing_frame, text="[Нет] Отсутствует")
         self.missing_tree = self.create_treeview(self.missing_frame, ["Мод", "Ключи EN", "Причина"])
+
+        # Глобальная привязка Ctrl+C, чтобы копирование работало независимо от фокуса и раскладки
+        self.root.bind_all("<Control-KeyPress>", self.on_copy_shortcut)
         
         # Статус бар - используем tk.Frame для поддержки смены цветов фона
         self.status_frame = tk.Frame(self.root)
@@ -947,9 +950,7 @@ class LocalizationCheckerGUI:
         
         self.setup_tree_tags(tree)
         tree.bind("<Double-1>", lambda e: self.show_details(tree))
-        tree.bind("<Control-c>", lambda e, t=tree: self.copy_selected_mod_name(t))
-        tree.bind("<Control-C>", lambda e, t=tree: self.copy_selected_mod_name(t))
-        
+
         return tree
     
     def get_tree_category(self, tree):
@@ -977,10 +978,19 @@ class LocalizationCheckerGUI:
             self.status_message = message
             self.status_color = color
 
-    def show_temporary_status(self, message: str, color: str = "blue", timeout: int = 2000):
+    def show_temporary_status(self, message: str, color: str = "green", timeout: int = 2000):
         """Показывает временное сообщение в статусной строке."""
         self.status_label.config(text=message, foreground=color)
         self.root.after(timeout, lambda: self.set_status_message(self.status_message, self.status_color, True))
+
+    def on_copy_shortcut(self, event, tree):
+        """Обрабатывает Ctrl+C на разных раскладках клавиатуры."""
+        key = (event.keysym or "").lower()
+        char = (event.char or "").lower()
+        if key in ("c", "с", "cyrillic_es") or char in ("c", "с"):
+            self.copy_selected_mod_name(tree)
+            return "break"
+        return None
 
     def toggle_theme(self):
         """Переключает между светлой и тёмной темой."""
@@ -1167,8 +1177,44 @@ class LocalizationCheckerGUI:
         mod_name = str(values[0])
         self.root.clipboard_clear()
         self.root.clipboard_append(mod_name)
-        self.show_temporary_status(f"Скопировано: {mod_name}", color="blue")
+        self.show_temporary_status(f"Скопировано: {mod_name}")
         return "break"
+
+    def get_tree_with_selection(self):
+        """Возвращает первое дерево, в котором есть текущий выбор."""
+        for tree in (self.full_tree, self.partial_tree, self.missing_tree):
+            if tree.selection():
+                return tree
+        return None
+
+    def is_copy_shortcut(self, event):
+        """Проверяет, что нажат Ctrl+C на любой раскладке клавиатуры."""
+        key = (event.keysym or "").lower()
+        char = (event.char or "").lower()
+        keysym_num = getattr(event, "keysym_num", None)
+        keycode = getattr(event, "keycode", None)
+
+        if key in ("c", "с", "cyrillic_es"):
+            return True
+        if char in ("c", "с"):
+            return True
+        if keysym_num in (ord("c"), ord("C"), ord("с"), ord("С"), 0x0441, 0x0421):
+            return True
+        if keycode in (54, 67, 99):
+            return True
+        return False
+
+    def on_copy_shortcut(self, event, tree=None):
+        """Обрабатывает Ctrl+C на разных раскладках клавиатуры."""
+        if not (event.state & 0x4):
+            return None
+
+        if self.is_copy_shortcut(event):
+            target_tree = tree if tree is not None else self.get_tree_with_selection()
+            if target_tree:
+                self.copy_selected_mod_name(target_tree)
+                return "break"
+        return None
     
     def on_column_click(self, column, tree):
         """Обработчик клика на заголовок колонки для сортировки."""
