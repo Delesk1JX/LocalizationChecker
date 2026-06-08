@@ -1035,10 +1035,10 @@ class LocalizationCheckerGUI:
 
             # Настраиваем стиль ttk виджетов для тёмной темы
             try:
-                self.style.configure("Custom.Treeview", background="#000000", fieldbackground="#000000", foreground=dark_fg, borderwidth=0)
-                self.style.configure("Custom.Treeview.Heading", background="#000000", foreground=dark_fg, borderwidth=0)
+                self.style.configure("Custom.Treeview", background="#121212", fieldbackground="#121212", foreground=dark_fg, borderwidth=0)
+                self.style.configure("Custom.Treeview.Heading", background="#121212", foreground=dark_fg, borderwidth=0)
                 self.style.map("Custom.Treeview.Heading",
-                    background=[('active', '#1a1a1a'), ('!active', '#000000')],
+                    background=[('active', '#1a1a1a'), ('!active', '#121212')],
                     foreground=[('active', dark_fg), ('!active', dark_fg)]
                 )
                 # Notebook/tab: убрать разделительный светлый фон под вкладками
@@ -1100,7 +1100,7 @@ class LocalizationCheckerGUI:
             # Сброс стилей ttk к светлым значениям
             try:
                 self.style.configure("Custom.Treeview", background="white", fieldbackground="white", foreground="black", borderwidth=0)
-                self.style.configure("Custom.Treeview.Heading", background="#e0e0e0", foreground="#000000", borderwidth=0)
+                self.style.configure("Custom.Treeview.Heading", background="#e0e0e0", foreground="#121212", borderwidth=0)
                 self.style.map("Custom.Treeview.Heading",
                     background=[('active', '#d0d0d0'), ('!active', '#e0e0e0')],
                     foreground=[('active', 'black'), ('!active', 'black')]
@@ -1113,13 +1113,13 @@ class LocalizationCheckerGUI:
                     foreground=[('selected', 'black'), ('!selected', 'black')],
                     borderwidth=[('selected', 0), ('!selected', 0)]
                 )
-                self.style.configure("Custom.TButton", background="#e0e0e0", foreground="#000000", padding=5)
+                self.style.configure("Custom.TButton", background="#e0e0e0", foreground="#121212", padding=5)
                 self.style.map("Custom.TButton",
                     background=[('active', '#d0d0d0'), ('!disabled', '#e0e0e0')],
                     foreground=[('active', 'black'), ('!disabled', 'black')]
                 )
                 self.style.configure("Custom.TEntry", fieldbackground="white", foreground="black", background="white")
-                self.style.configure("Custom.TCombobox", fieldbackground="#ffffff", foreground="#000000", background="#e0e0e0")
+                self.style.configure("Custom.TCombobox", fieldbackground="#ffffff", foreground="#121212", background="#e0e0e0")
                 self.style.configure("Custom.Horizontal.TProgressbar", troughcolor="#e8e8e8", background="#28a028", bordercolor="#e8e8e8", lightcolor="#4cbf4c", darkcolor="#1c7c1c")
             except Exception:
                 pass
@@ -1156,7 +1156,7 @@ class LocalizationCheckerGUI:
         tree.tag_configure("source_missing", background=missing_bg, foreground="black")
 
         # Заголовки колонок должны соответствовать текущей теме
-        heading_bg = "#000000" if self.dark_mode else "#e0e0e0"
+        heading_bg = "#121212" if self.dark_mode else "#e0e0e0"
         heading_fg = "white" if self.dark_mode else "black"
         try:
             self.style.configure("Treeview.Heading", background=heading_bg, foreground=heading_fg)
