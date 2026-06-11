@@ -30,6 +30,7 @@
 """
 
 import os
+import re
 import sys
 import json
 import zipfile
@@ -106,15 +107,13 @@ def get_system_theme() -> str:
     return "light"
 
 
-def load_config(config_file: str = "config.json") -> Dict[str, Any]:
+def load_config(config_file: str = "config.json") -> None:
     """
-    Загружает конфигурацию из JSON файла.
-    
+    Загружает конфигурацию из JSON файла и сохраняет в глобальную переменную CONFIG.
+    Возвращаемого значения нет — используйте CONFIG напрямую после вызова.
+
     Args:
         config_file: Путь к файлу конфига
-        
-    Returns:
-        Словарь с конфигурацией или значения по умолчанию
     """
     global CONFIG
     try:
@@ -171,7 +170,7 @@ def load_config(config_file: str = "config.json") -> Dict[str, Any]:
                         },
                         "dark": default_row_colors["dark"]
                     }
-                return CONFIG
+                # конец нормализации row_colors
     except Exception as e:
         print(f"⚠️  Ошибка загрузки конфига: {e}")
     
@@ -195,7 +194,7 @@ def load_config(config_file: str = "config.json") -> Dict[str, Any]:
             }
         }
     }
-    return CONFIG
+    # load_config завершена — CONFIG установлен
 
 
 def set_translated_mods_path(path: Optional[Path]):
@@ -289,10 +288,43 @@ def clean_json_with_comments(content: str) -> str:
     Returns:
         JSON содержимое с удаленными комментариями
     """
-    import re
-    
-    # Удаляем многострочные комментарии /* ... */
-    content = re.sub(r'/\*.*?\*/', '', content, flags=re.DOTALL)
+    # Удаляем многострочные комментарии /* ... */ с учётом строк JSON.
+    # Простая regex вида re.sub(r'/\*.*?\*/', ...) ломает валидный JSON,
+    # если подстрока /* ... */ встречается внутри строкового значения.
+    # Используем посимвольный обход, чтобы не трогать содержимое строк.
+    result_chars: List[str] = []
+    i = 0
+    in_string = False
+    escaped = False
+    n = len(content)
+    while i < n:
+        ch = content[i]
+        if escaped:
+            result_chars.append(ch)
+            escaped = False
+            i += 1
+            continue
+        if ch == '\\' and in_string:
+            result_chars.append(ch)
+            escaped = True
+            i += 1
+            continue
+        if ch == '"':
+            in_string = not in_string
+            result_chars.append(ch)
+            i += 1
+            continue
+        if not in_string and ch == '/' and i + 1 < n and content[i + 1] == '*':
+            # Ищем закрывающий */
+            end = content.find('*/', i + 2)
+            if end == -1:
+                # Незакрытый комментарий — удаляем до конца
+                break
+            i = end + 2
+            continue
+        result_chars.append(ch)
+        i += 1
+    content = ''.join(result_chars)
     
     # Удаляем однострочные комментарии //
     # Но должны быть осторожны не удалить // внутри строк
@@ -411,7 +443,7 @@ def parse_lang_file(file_path: Path) -> Optional[Dict[str, str]]:
                 if '=' in line:
                     eq_index = line.index('=')
                     key = line[:eq_index].strip()
-                    value = line[eq_index + 1:].strip()
+                    value = line[eq_index + 1:]  # не strip() — пробелы в значении значимы
                     
                     if key:  # Ключ не должен быть пустым
                         result[key] = value
@@ -467,7 +499,7 @@ def parse_lang_from_jar(jar_path: Path, lang_path: str) -> Optional[Dict[str, st
                     if '=' in line:
                         eq_index = line.index('=')
                         key = line[:eq_index].strip()
-                        value = line[eq_index + 1:].strip()
+                        value = line[eq_index + 1:]  # не strip() — пробелы в значении значимы
                         
                         if key:  # Ключ не должен быть пустым
                             result[key] = value
@@ -502,20 +534,14 @@ def find_ru_ru_in_translated_mods(mod_name: str) -> Optional[Path]:
         return None
     
     # mod_name уже является чистым именем мода из assets
-    possible_names = [mod_name]
-    
-    # Пробуем найти папку мода в TranslatedMods
-    for name in possible_names:
-        mod_dir = TRANSLATED_MODS_PATH / name
-        if mod_dir.exists() and mod_dir.is_dir():
-            # Сначала ищем ru_ru.json (новый формат)
-            ru_ru_path = mod_dir / "lang" / "ru_ru.json"
-            if ru_ru_path.exists():
-                return ru_ru_path
-            # Затем ищем ru_RU.lang (старый формат для 1.12.2 и ниже)
-            ru_lang_path = mod_dir / "lang" / "ru_RU.lang"
-            if ru_lang_path.exists():
-                return ru_lang_path
+    mod_dir = TRANSLATED_MODS_PATH / mod_name
+    if mod_dir.exists() and mod_dir.is_dir():
+        ru_ru_path = mod_dir / "lang" / "ru_ru.json"
+        if ru_ru_path.exists():
+            return ru_ru_path
+        ru_lang_path = mod_dir / "lang" / "ru_RU.lang"
+        if ru_lang_path.exists():
+            return ru_lang_path
     
     # Если точное совпадение не найдено, ищем по более строгим правилам.
     # Избегаем ложных совпадений для очень коротких имен, например 'aq'.
@@ -537,7 +563,6 @@ def find_ru_ru_in_translated_mods(mod_name: str) -> Optional[Path]:
         
         # Дополнительная проверка: если имя папки является аббревиатурой или префиксом
         # Например, ali -> advancedlootinfo (a-l-i первые буквы слов)
-        import re
         # Разбиваем mod_name на слова (по подчеркиваниям или дефисам)
         words = re.split(r'[_-]', mod_name.lower())
         if len(words) == 1:
@@ -610,6 +635,36 @@ def extract_mod_name_from_assets(jar_path: Path) -> Optional[str]:
     return None
 
 
+def _compare_keys(en_data: Dict[str, str], ru_data: Dict[str, str]) -> Dict[str, Any]:
+    """
+    Сравнивает ключи английской и русской локализаций.
+
+    Returns:
+        Словарь с полями: ru_keys, missing_keys, extra_keys, percentage, status
+    """
+    en_keys_set = set(en_data.keys())
+    ru_keys_set = set(ru_data.keys())
+    en_count = len(en_keys_set)
+
+    missing_keys = sorted(en_keys_set - ru_keys_set)
+    extra_keys = sorted(ru_keys_set - en_keys_set)
+
+    if en_count == 0:
+        percentage = 0.0
+        status = "missing"
+    else:
+        percentage = round((len(en_keys_set & ru_keys_set) / en_count) * 100, 2)
+        status = "full" if percentage == 100.0 else "partial"
+
+    return {
+        "ru_keys": len(ru_data),
+        "missing_keys": missing_keys,
+        "extra_keys": extra_keys,
+        "percentage": percentage,
+        "status": status,
+    }
+
+
 def check_translated_mods_localization(jar_path: Path, mod_name: str, en_data: Dict[str, str], en_us_path: str) -> Dict[str, Any]:
     """
     Проверяет наличие перевода для мода в папке TranslatedMods.
@@ -660,31 +715,13 @@ def check_translated_mods_localization(jar_path: Path, mod_name: str, en_data: D
     
     result["found"] = True
     result["source"] = "translated_mods"
-    result["ru_keys"] = len(ru_data)
-    
-    en_keys_set = set(en_data.keys())
-    ru_keys_set = set(ru_data.keys())
-    
-    # Находим недостающие ключи
-    missing_keys = en_keys_set - ru_keys_set
-    extra_keys = ru_keys_set - en_keys_set
-    
-    result["missing_keys"] = sorted(list(missing_keys))
-    result["extra_keys"] = sorted(list(extra_keys))
-    
-    # Вычисляем процент
-    if result["en_keys"] == 0:
-        result["percentage"] = 0.0
+
+    cmp = _compare_keys(en_data, ru_data)
+    result.update(cmp)
+    # _compare_keys возвращает статус "missing" при 0% — нормализуем до "not_found" здесь
+    if cmp["status"] == "missing":
         result["status"] = "not_found"
-    else:
-        present_keys = en_keys_set & ru_keys_set
-        result["percentage"] = round((len(present_keys) / result["en_keys"]) * 100, 2)
-        
-        if result["percentage"] == 100.0:
-            result["status"] = "full"
-        else:
-            result["status"] = "partial"
-    
+
     return result
 
 
@@ -819,7 +856,7 @@ def check_mod_localization(jar_path: Path, mod_name: str, mod_info: Dict[str, An
     Проверяет локализацию одного мода внутри архива.
     """
     result = {
-        'mod_name': f"{mod_name} ({jar_path.name})",
+        'mod_name': f"{jar_path.name} ({mod_name})",
         'status': 'missing',
         'source': 'none',
         'ru_keys': 0,
@@ -862,8 +899,9 @@ def check_mod_localization(jar_path: Path, mod_name: str, mod_info: Dict[str, An
     if TRANSLATED_MODS_PATH is not None:
         translated_mods_result = check_translated_mods_localization(jar_path, mod_name, en_data, en_source)
         if translated_mods_result['found']:
+            is_full = translated_mods_result['status'] == 'full'
             result.update({
-                'status': 'full' if translated_mods_result['status'] == 'full' else 'partial',
+                'status': 'translated' if is_full else 'partial',
                 'source': 'translated_mods',
                 'ru_keys': translated_mods_result['ru_keys'],
                 'percentage': translated_mods_result['percentage'],
@@ -876,26 +914,14 @@ def check_mod_localization(jar_path: Path, mod_name: str, mod_info: Dict[str, An
         ru_data = extract_json_from_jar(jar_path, ru_ru_path)
         if ru_data is not None:
             result['source'] = 'jar'
-            result['ru_keys'] = len(ru_data)
-            en_keys_set = set(en_data.keys())
-            ru_keys_set = set(ru_data.keys())
-            result['missing_keys'] = sorted(en_keys_set - ru_keys_set)
-            result['extra_keys'] = sorted(ru_keys_set - en_keys_set)
-            result['percentage'] = round((len(en_keys_set & ru_keys_set) / result['en_keys']) * 100, 2)
-            result['status'] = 'full' if result['percentage'] == 100.0 else 'partial'
+            result.update(_compare_keys(en_data, ru_data))
             return result
 
     if ru_lang_path is not None:
         ru_data = parse_lang_from_jar(jar_path, ru_lang_path)
         if ru_data is not None:
             result['source'] = 'jar'
-            result['ru_keys'] = len(ru_data)
-            en_keys_set = set(en_data.keys())
-            ru_keys_set = set(ru_data.keys())
-            result['missing_keys'] = sorted(en_keys_set - ru_keys_set)
-            result['extra_keys'] = sorted(ru_keys_set - en_keys_set)
-            result['percentage'] = round((len(en_keys_set & ru_keys_set) / result['en_keys']) * 100, 2)
-            result['status'] = 'full' if result['percentage'] == 100.0 else 'partial'
+            result.update(_compare_keys(en_data, ru_data))
             return result
 
     result['status'] = 'missing'
@@ -954,7 +980,8 @@ def scan_jars_directory(base_path: Path, progress_callback=None) -> Dict[str, Li
     results = {
         "full": [],
         "partial": [],
-        "missing": []
+        "missing": [],
+        "translated": []
     }
     
     # Находим все .jar и .zip файлы в директории (не рекурсивно)
@@ -971,7 +998,14 @@ def scan_jars_directory(base_path: Path, progress_callback=None) -> Dict[str, Li
         future_to_jar = {executor.submit(check_jar_localization, mod): mod for mod in mod_files}
 
         for i, future in enumerate(as_completed(future_to_jar)):
-            jar_results = future.result()
+            try:
+                jar_results = future.result()
+            except Exception as e:
+                jar_path = future_to_jar[future]
+                print(f"⚠️  Ошибка обработки {jar_path.name}: {e}")
+                if progress_callback:
+                    progress_callback(i + 1, total)
+                continue
 
             if progress_callback:
                 progress_callback(i + 1, total)
@@ -981,7 +1015,10 @@ def scan_jars_directory(base_path: Path, progress_callback=None) -> Dict[str, Li
                 if jar_result["status"] == "skipped":
                     continue
 
-                if jar_result["status"] == "full":
+                # Моды из TranslatedMods со 100% переводом — в отдельную категорию
+                if jar_result["status"] == "translated":
+                    results["translated"].append(jar_result)
+                elif jar_result["status"] == "full":
                     results["full"].append(jar_result)
                 elif jar_result["status"] == "partial":
                     results["partial"].append(jar_result)
@@ -1014,7 +1051,8 @@ class LocalizationCheckerGUI:
         self.sort_state = {
             "full": {"column": None, "reverse": False},
             "partial": {"column": None, "reverse": False},
-            "missing": {"column": None, "reverse": False}
+            "missing": {"column": None, "reverse": False},
+            "translated": {"column": None, "reverse": False}
         }
         
         self.setup_ui()
@@ -1114,6 +1152,11 @@ class LocalizationCheckerGUI:
         self.notebook.add(self.missing_frame, text="[Нет] Отсутствует")
         self.missing_tree = self.create_treeview(self.missing_frame, ["Мод", "Ключи EN", "Причина"])
 
+        # Вкладка "Переведён" (только из TranslatedMods, 100%)
+        self.translated_frame = tk.Frame(self.notebook)
+        self.notebook.add(self.translated_frame, text="[Переведён]")
+        self.translated_tree = self.create_treeview(self.translated_frame, ["Мод", "Ключи RU", "Ключи EN", "%"])
+
         # Глобальная привязка Ctrl+C, чтобы копирование работало независимо от фокуса и раскладки
         self.root.bind_all("<Control-KeyPress>", self.on_copy_shortcut)
         
@@ -1142,6 +1185,7 @@ class LocalizationCheckerGUI:
         
         self.setup_tree_tags(tree)
         tree.bind("<Double-1>", lambda e: self.show_details(tree))
+        tree.bind("<Button-3>", lambda e, t=tree: self.show_context_menu(e, t))
 
         return tree
     
@@ -1153,6 +1197,8 @@ class LocalizationCheckerGUI:
             return "partial"
         elif tree == self.missing_tree:
             return "missing"
+        elif tree == self.translated_tree:
+            return "translated"
         return None
 
     def get_source_tag(self, source: str) -> str:
@@ -1220,6 +1266,7 @@ class LocalizationCheckerGUI:
                 self.full_frame.config(bg=dark_bg)
                 self.partial_frame.config(bg=dark_bg)
                 self.missing_frame.config(bg=dark_bg)
+                self.translated_frame.config(bg=dark_bg)
             except Exception:
                 pass
 
@@ -1288,6 +1335,7 @@ class LocalizationCheckerGUI:
                 self.full_frame.config(bg=default_bg)
                 self.partial_frame.config(bg=default_bg)
                 self.missing_frame.config(bg=default_bg)
+                self.translated_frame.config(bg=default_bg)
             except Exception:
                 pass
 
@@ -1329,6 +1377,7 @@ class LocalizationCheckerGUI:
             self.setup_tree_tags(self.full_tree)
             self.setup_tree_tags(self.partial_tree)
             self.setup_tree_tags(self.missing_tree)
+            self.setup_tree_tags(self.translated_tree)
             # Пересоздаём результаты чтобы применить новые теги
             self.apply_filter()
 
@@ -1381,10 +1430,18 @@ class LocalizationCheckerGUI:
         return "break"
 
     def get_tree_with_selection(self):
-        """Возвращает первое дерево, в котором есть текущий выбор."""
-        for tree in (self.full_tree, self.partial_tree, self.missing_tree):
-            if tree.selection():
-                return tree
+        """Возвращает tree активной вкладки, только если в нём есть выделение."""
+        # Определяем активную вкладку по индексу
+        tab_index = self.notebook.index(self.notebook.select())
+        tab_to_tree = {
+            0: self.full_tree,
+            1: self.partial_tree,
+            2: self.missing_tree,
+            3: self.translated_tree,
+        }
+        active_tree = tab_to_tree.get(tab_index)
+        if active_tree and active_tree.selection():
+            return active_tree
         return None
 
     def is_copy_shortcut(self, event):
@@ -1404,13 +1461,40 @@ class LocalizationCheckerGUI:
             return True
         return False
 
-    def on_copy_shortcut(self, event, tree=None):
+    def show_context_menu(self, event, tree):
+        """Показывает контекстное меню при нажатии ПКМ."""
+        # Выделяем строку под курсором
+        item = tree.identify_row(event.y)
+        if item:
+            tree.selection_set(item)
+
+        bg = "#2f2f2f" if self.dark_mode else "#ffffff"
+        fg = "white" if self.dark_mode else "black"
+        abg = "#393939" if self.dark_mode else "#e0e0e0"
+
+        menu = tk.Menu(self.root, tearoff=0, bg=bg, fg=fg, activebackground=abg, activeforeground=fg)
+        menu.add_command(label="📋 Скопировать", command=lambda: self.copy_selected_mod_name(tree))
+        menu.add_command(label="📌 Вставить", command=lambda: self._paste_from_clipboard(tree))
+        menu.add_separator()
+        menu.add_command(label="🔍 Подробнее", command=lambda: self.show_details(tree))
+        menu.tk_popup(event.x_root, event.y_root)
+
+    def _paste_from_clipboard(self, tree):
+        """Вставляет текст из буфера обмена в строку поиска."""
+        try:
+            text = self.root.clipboard_get()
+            current = self.search_var.get()
+            self.search_var.set(current + text)
+        except tk.TclError:
+            pass
+
+    def on_copy_shortcut(self, event):
         """Обрабатывает Ctrl+C на разных раскладках клавиатуры."""
         if not (event.state & 0x4):
             return None
 
         if self.is_copy_shortcut(event):
-            target_tree = tree if tree is not None else self.get_tree_with_selection()
+            target_tree = self.get_tree_with_selection()
             if target_tree:
                 self.copy_selected_mod_name(target_tree)
                 return "break"
@@ -1492,7 +1576,11 @@ class LocalizationCheckerGUI:
                 )
     
     def update_progress(self, current, total):
-        """Обновляет индикатор прогресса."""
+        """Планирует обновление индикатора прогресса в главном потоке (thread-safe)."""
+        self.root.after(0, self._apply_progress, current, total)
+
+    def _apply_progress(self, current, total):
+        """Реально обновляет виджеты прогресса — должен вызываться только из главного потока."""
         progress = (current / total) * 100
         self.progress_bar['value'] = progress
         self.progress_label.config(text=f"Обработано: {current}/{total}")
@@ -1538,9 +1626,10 @@ class LocalizationCheckerGUI:
         self.apply_filter()
         
         # Обновляем статус
-        total = len(self.results["full"]) + len(self.results["partial"]) + len(self.results["missing"])
+        translated_count = len(self.results.get("translated", []))
+        total = len(self.results["full"]) + len(self.results["partial"]) + len(self.results["missing"]) + translated_count
         self.set_status_message(
-            f"Всего: {total} | [100%]: {len(self.results['full'])} | [Частично]: {len(self.results['partial'])} | [Нет]: {len(self.results['missing'])}",
+            f"Всего: {total} | [100%]: {len(self.results['full'])} | [Частично]: {len(self.results['partial'])} | [Нет]: {len(self.results['missing'])} | Переведён: {translated_count}",
             color="green"
         )
         
@@ -1628,6 +1717,8 @@ class LocalizationCheckerGUI:
             self.partial_tree.delete(item)
         for item in self.missing_tree.get_children():
             self.missing_tree.delete(item)
+        for item in self.translated_tree.get_children():
+            self.translated_tree.delete(item)
         
         if not self.results:
             return
@@ -1635,7 +1726,6 @@ class LocalizationCheckerGUI:
         # Показываем результаты - Полный перевод
         full_filtered = [mod for mod in self.results["full"] 
                        if search_text in mod["mod_name"].lower()]
-        # Применяем сортировку
         sort_col = self.sort_state["full"]["column"] or "Мод"
         full_sorted = self.sort_results(full_filtered, sort_col, self.sort_state["full"]["reverse"])
         
@@ -1650,7 +1740,6 @@ class LocalizationCheckerGUI:
         # Показываем результаты - Неполный перевод
         partial_filtered = [mod for mod in self.results["partial"]
                           if search_text in mod["mod_name"].lower()]
-        # Применяем сортировку
         sort_col = self.sort_state["partial"]["column"] or "Мод"
         partial_sorted = self.sort_results(partial_filtered, sort_col, self.sort_state["partial"]["reverse"])
         
@@ -1667,7 +1756,6 @@ class LocalizationCheckerGUI:
         # Показываем результаты - Отсутствует
         missing_filtered = [mod for mod in self.results["missing"]
                           if search_text in mod["mod_name"].lower()]
-        # Применяем сортировку
         sort_col = self.sort_state["missing"]["column"] or "Мод"
         missing_sorted = self.sort_results(missing_filtered, sort_col, self.sort_state["missing"]["reverse"])
         
@@ -1677,6 +1765,20 @@ class LocalizationCheckerGUI:
                 mod["mod_name"],
                 mod["en_keys"],
                 reason
+            ), tags=(self.get_source_tag(mod.get("source", "none")),))
+
+        # Показываем результаты - Переведён (из TranslatedMods, 100%)
+        translated_filtered = [mod for mod in self.results.get("translated", [])
+                               if search_text in mod["mod_name"].lower()]
+        sort_col = self.sort_state["translated"]["column"] or "Мод"
+        translated_sorted = self.sort_results(translated_filtered, sort_col, self.sort_state["translated"]["reverse"])
+
+        for mod in translated_sorted:
+            self.translated_tree.insert("", tk.END, values=(
+                mod["mod_name"],
+                mod["ru_keys"],
+                mod["en_keys"],
+                f"{mod['percentage']}%"
             ), tags=(self.get_source_tag(mod.get("source", "none")),))
     
     def show_details(self, tree):
@@ -1690,7 +1792,7 @@ class LocalizationCheckerGUI:
         
         # Находим полную информацию о моде
         mod_info = None
-        for category in ["full", "partial", "missing"]:
+        for category in ["full", "partial", "missing", "translated"]:
             for mod in self.results[category]:
                 if mod["mod_name"] == mod_name:
                     mod_info = mod
@@ -1791,11 +1893,12 @@ class LocalizationCheckerGUI:
         
         output_data = {
             "scan_directory": str(self.current_path),
-            "total_mods": len(self.results["full"]) + len(self.results["partial"]) + len(self.results["missing"]),
+            "total_mods": len(self.results["full"]) + len(self.results["partial"]) + len(self.results["missing"]) + len(self.results.get("translated", [])),
             "summary": {
                 "full_translation": len(self.results["full"]),
                 "partial_translation": len(self.results["partial"]),
-                "missing_translation": len(self.results["missing"])
+                "missing_translation": len(self.results["missing"]),
+                "translated_mods": len(self.results.get("translated", []))
             },
             "mods": self.results
         }
@@ -1893,7 +1996,7 @@ def main_cli():
     results = scan_jars_directory(base_path)
     
     # Считаем только моды, которые действительно проверены (не пропущены)
-    total_mods = len(results["full"]) + len(results["partial"]) + len(results["missing"])
+    total_mods = len(results["full"]) + len(results["partial"]) + len(results["missing"]) + len(results.get("translated", []))
     
     if total_mods == 0:
         print("⚠️  .jar файлы с файлами локализации не найдены или все пропущены!")
@@ -1906,6 +2009,7 @@ def main_cli():
     print(f"   [100%] С полным переводом: {len(results['full'])}")
     print(f"   [Частично] С неполным переводом: {len(results['partial'])}")
     print(f"   [Нет] Без русского языка: {len(results['missing'])}")
+    print(f"   [Переведён] Из TranslatedMods (100%): {len(results.get('translated', []))}")
     print("=" * 60)
     
     # Сохранение результатов в JSON
@@ -1916,7 +2020,8 @@ def main_cli():
         "summary": {
             "full_translation": len(results["full"]),
             "partial_translation": len(results["partial"]),
-            "missing_translation": len(results["missing"])
+            "missing_translation": len(results["missing"]),
+            "translated_mods": len(results.get("translated", []))
         },
         "mods": results
     }
@@ -1933,7 +2038,6 @@ def main_cli():
 
 
 if __name__ == "__main__":
-    import sys
     # Если аргументов нет или есть --gui, запускаем GUI
     if len(sys.argv) == 1 or "--gui" in sys.argv:
         main_gui()
