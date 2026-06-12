@@ -874,18 +874,27 @@ def check_mod_localization(jar_path: Path, mod_name: str, mod_info: Dict[str, An
         result['error'] = 'Папка локализации (lang/language/lang_nei) не найдена в моде'
         return result
 
-    en_data = None
+    en_data: Dict[str, str] = {}
     en_source = None
 
-    if en_us_path is not None:
-        en_data = extract_json_from_jar(jar_path, en_us_path)
-        en_source = en_us_path
+    # Собираем ключи из ВСЕХ en_us.json кандидатов (lang + lang_nei + language)
+    for candidate in mod_info['en_us_candidates']:
+        data = extract_json_from_jar(jar_path, candidate)
+        if data:
+            en_data.update(data)
+            if en_source is None:
+                en_source = candidate
 
-    if en_data is None and en_lang_path is not None:
-        en_data = parse_lang_from_jar(jar_path, en_lang_path)
-        en_source = en_lang_path
+    # Если JSON не нашли — пробуем все .lang кандидаты
+    if not en_data:
+        for candidate in mod_info['en_lang_candidates']:
+            data = parse_lang_from_jar(jar_path, candidate)
+            if data:
+                en_data.update(data)
+                if en_source is None:
+                    en_source = candidate
 
-    if en_data is None:
+    if not en_data:
         result['status'] = 'skipped'
         result['error'] = 'Файл en_us.json/en_US.lang не найден в моде'
         return result
@@ -910,19 +919,23 @@ def check_mod_localization(jar_path: Path, mod_name: str, mod_info: Dict[str, An
             })
             return result
 
-    if ru_ru_path is not None:
-        ru_data = extract_json_from_jar(jar_path, ru_ru_path)
-        if ru_data is not None:
-            result['source'] = 'jar'
-            result.update(_compare_keys(en_data, ru_data))
-            return result
+    # Собираем ru ключи из всех кандидатов (lang + lang_nei + language)
+    ru_data: Dict[str, str] = {}
+    for candidate in mod_info['ru_ru_candidates']:
+        data = extract_json_from_jar(jar_path, candidate)
+        if data:
+            ru_data.update(data)
 
-    if ru_lang_path is not None:
-        ru_data = parse_lang_from_jar(jar_path, ru_lang_path)
-        if ru_data is not None:
-            result['source'] = 'jar'
-            result.update(_compare_keys(en_data, ru_data))
-            return result
+    if not ru_data:
+        for candidate in mod_info['ru_lang_candidates']:
+            data = parse_lang_from_jar(jar_path, candidate)
+            if data:
+                ru_data.update(data)
+
+    if ru_data:
+        result['source'] = 'jar'
+        result.update(_compare_keys(en_data, ru_data))
+        return result
 
     result['status'] = 'missing'
     result['error'] = 'Нет ru_ru.json/ru_RU.lang'
@@ -981,11 +994,21 @@ def scan_jars_directory(base_path: Path, progress_callback=None) -> Dict[str, Li
         "full": [],
         "partial": [],
         "missing": [],
-        "translated": []
+        "translated": [],
+        "outdated": []
     }
     
-    # Находим все .jar и .zip файлы в директории (не рекурсивно)
-    mod_files = list(base_path.glob("*.jar")) + list(base_path.glob("*.zip"))
+    # Папки которые нужно исключить из рекурсивного сканирования
+    EXCLUDED_DIRS = {".connector", "mcef-cache"}
+
+    # Собираем все .jar и .zip файлы рекурсивно, пропуская исключённые папки
+    mod_files: List[Path] = []
+    for item in base_path.rglob("*"):
+        # Пропускаем файлы внутри исключённых папок
+        if any(part in EXCLUDED_DIRS for part in item.parts):
+            continue
+        if item.is_file() and item.suffix.lower() in (".jar", ".zip"):
+            mod_files.append(item)
     
     if not mod_files:
         return results
@@ -1015,9 +1038,12 @@ def scan_jars_directory(base_path: Path, progress_callback=None) -> Dict[str, Li
                 if jar_result["status"] == "skipped":
                     continue
 
-                # Моды из TranslatedMods со 100% переводом — в отдельную категорию
+                # Моды из TranslatedMods со 100% — отдельная категория
+                # Моды из TranslatedMods с неполным переводом — "Устаревший перевод"
                 if jar_result["status"] == "translated":
                     results["translated"].append(jar_result)
+                elif jar_result.get("source") == "translated_mods" and jar_result["status"] == "partial":
+                    results["outdated"].append(jar_result)
                 elif jar_result["status"] == "full":
                     results["full"].append(jar_result)
                 elif jar_result["status"] == "partial":
@@ -1052,7 +1078,8 @@ class LocalizationCheckerGUI:
             "full": {"column": None, "reverse": False},
             "partial": {"column": None, "reverse": False},
             "missing": {"column": None, "reverse": False},
-            "translated": {"column": None, "reverse": False}
+            "translated": {"column": None, "reverse": False},
+            "outdated": {"column": None, "reverse": False}
         }
         
         self.setup_ui()
@@ -1070,15 +1097,19 @@ class LocalizationCheckerGUI:
         
         self.check_btn = ttk.Button(self.top_frame, text="▶️ Проверить", command=self.start_check, state=tk.DISABLED, style="Custom.TButton")
         self.check_btn.pack(side=tk.LEFT, padx=5)
+
+        self.refresh_btn = ttk.Button(self.top_frame, text="🔄 Обновить", command=self.refresh_check, state=tk.DISABLED, style="Custom.TButton")
+        self.refresh_btn.pack(side=tk.LEFT, padx=5)
         
         self.export_btn = ttk.Button(self.top_frame, text="💾 Экспорт в JSON", command=self.export_results, state=tk.DISABLED, style="Custom.TButton")
         self.export_btn.pack(side=tk.LEFT, padx=5)
+
+        self.open_translated_btn = ttk.Button(self.top_frame, text="📂 TranslatedMods", command=self.open_translated_mods_folder, state=tk.DISABLED, style="Custom.TButton")
+        self.open_translated_btn.pack(side=tk.LEFT, padx=5)
         
-        # Кнопка переключения темы
+        # Кнопка переключения темы (кнопку "Закрыть" убрали)
         self.theme_btn = ttk.Button(self.top_frame, text="🌙 Тёмная тема", command=self.toggle_theme, style="Custom.TButton")
         self.theme_btn.pack(side=tk.RIGHT, padx=5)
-        
-        ttk.Button(self.top_frame, text="❌ Закрыть", command=self.root.quit, style="Custom.TButton").pack(side=tk.RIGHT, padx=5)
         
         # Стиль для виджетов ttk — будем менять для тёмной темы
         self.style = ttk.Style(self.root)
@@ -1157,8 +1188,16 @@ class LocalizationCheckerGUI:
         self.notebook.add(self.translated_frame, text="[Переведён]")
         self.translated_tree = self.create_treeview(self.translated_frame, ["Мод", "Ключи RU", "Ключи EN", "%"])
 
+        # Вкладка "Устаревший перевод" (из TranslatedMods, но не 100%)
+        self.outdated_frame = tk.Frame(self.notebook)
+        self.notebook.add(self.outdated_frame, text="[Устарел]")
+        self.outdated_tree = self.create_treeview(self.outdated_frame, ["Мод", "Ключи RU", "Ключи EN", "%", "Не хватает"])
+
         # Глобальная привязка Ctrl+C, чтобы копирование работало независимо от фокуса и раскладки
         self.root.bind_all("<Control-KeyPress>", self.on_copy_shortcut)
+
+        # Drag & drop: папку можно перетащить прямо в окно
+        self._setup_drag_and_drop()
         
         # Статус бар - используем tk.Frame для поддержки смены цветов фона
         self.status_frame = tk.Frame(self.root)
@@ -1199,6 +1238,8 @@ class LocalizationCheckerGUI:
             return "missing"
         elif tree == self.translated_tree:
             return "translated"
+        elif tree == self.outdated_tree:
+            return "outdated"
         return None
 
     def get_source_tag(self, source: str) -> str:
@@ -1267,6 +1308,7 @@ class LocalizationCheckerGUI:
                 self.partial_frame.config(bg=dark_bg)
                 self.missing_frame.config(bg=dark_bg)
                 self.translated_frame.config(bg=dark_bg)
+                self.outdated_frame.config(bg=dark_bg)
             except Exception:
                 pass
 
@@ -1336,6 +1378,7 @@ class LocalizationCheckerGUI:
                 self.partial_frame.config(bg=default_bg)
                 self.missing_frame.config(bg=default_bg)
                 self.translated_frame.config(bg=default_bg)
+                self.outdated_frame.config(bg=default_bg)
             except Exception:
                 pass
 
@@ -1378,8 +1421,16 @@ class LocalizationCheckerGUI:
             self.setup_tree_tags(self.partial_tree)
             self.setup_tree_tags(self.missing_tree)
             self.setup_tree_tags(self.translated_tree)
+            self.setup_tree_tags(self.outdated_tree)
             # Пересоздаём результаты чтобы применить новые теги
             self.apply_filter()
+
+        # Обновляем все открытые окна деталей
+        for cb in getattr(self, "_detail_theme_callbacks", []):
+            try:
+                cb()
+            except Exception:
+                pass
 
     def setup_tree_tags(self, tree):
         """Создает теги для раскрашивания строк по источнику перевода."""
@@ -1399,7 +1450,6 @@ class LocalizationCheckerGUI:
         except Exception:
             pass
 
-        # Теги для строк всегда имеют чёрный текст (так как сами фоновые теги светлые)
         tree.tag_configure("source_jar", background=jar_bg, foreground="black")
         tree.tag_configure("source_translated_mods", background=translated_bg, foreground="black")
         tree.tag_configure("source_missing", background=missing_bg, foreground="black")
@@ -1431,13 +1481,13 @@ class LocalizationCheckerGUI:
 
     def get_tree_with_selection(self):
         """Возвращает tree активной вкладки, только если в нём есть выделение."""
-        # Определяем активную вкладку по индексу
         tab_index = self.notebook.index(self.notebook.select())
         tab_to_tree = {
             0: self.full_tree,
             1: self.partial_tree,
             2: self.missing_tree,
             3: self.translated_tree,
+            4: self.outdated_tree,
         }
         active_tree = tab_to_tree.get(tab_index)
         if active_tree and active_tree.selection():
@@ -1476,8 +1526,28 @@ class LocalizationCheckerGUI:
         menu.add_command(label="📋 Скопировать", command=lambda: self.copy_selected_mod_name(tree))
         menu.add_command(label="📌 Вставить", command=lambda: self._paste_from_clipboard(tree))
         menu.add_separator()
+        menu.add_command(label="📁 Расположение", command=lambda: self.open_mod_location(tree))
         menu.add_command(label="🔍 Подробнее", command=lambda: self.show_details(tree))
         menu.tk_popup(event.x_root, event.y_root)
+
+    def open_mod_location(self, tree):
+        """Открывает папку с .jar файлом мода в проводнике и выделяет файл."""
+        selection = tree.selection()
+        if not selection:
+            return
+        mod_name = tree.item(selection[0])["values"][0]
+        # mod_name имеет формат "filename.jar (assets_name)" — берём часть до пробела
+        jar_filename = mod_name.split(" (")[0]
+        jar_path = self.current_path / jar_filename
+        if not jar_path.exists():
+            messagebox.showwarning("Расположение", f"Файл не найден:\n{jar_path}")
+            return
+        if platform.system() == "Windows":
+            subprocess.Popen(["explorer", "/select,", str(jar_path)])
+        elif platform.system() == "Darwin":
+            subprocess.Popen(["open", "-R", str(jar_path)])
+        else:
+            subprocess.Popen(["xdg-open", str(jar_path.parent)])
 
     def _paste_from_clipboard(self, tree):
         """Вставляет текст из буфера обмена в строку поиска."""
@@ -1552,6 +1622,65 @@ class LocalizationCheckerGUI:
         
         return mods_list
     
+    def _setup_drag_and_drop(self):
+        """Регистрирует обработчик drag & drop (требует tkinterdnd2)."""
+        try:
+            self.root.drop_target_register("DND_Files")
+            self.root.dnd_bind("<<Drop>>", self._on_drop)
+        except Exception:
+            # tkinterdnd2 не установлен — drag & drop недоступен, ничего страшного
+            pass
+
+    def _on_drop(self, event):
+        """Обрабатывает перетаскивание папки/файла в окно."""
+        raw = event.data.strip()
+        # tkinterdnd2 может обернуть путь с пробелами в фигурные скобки
+        if raw.startswith("{") and raw.endswith("}"):
+            raw = raw[1:-1]
+        path = Path(raw)
+        if path.is_file():
+            path = path.parent
+        if path.is_dir():
+            self._apply_directory(path)
+
+    def _apply_directory(self, path: Path):
+        """Устанавливает выбранную папку и ищет TranslatedMods."""
+        self.current_path = path
+        self.select_btn.config(text=f"📁 {self.current_path.name}")
+        self.check_btn.config(state=tk.NORMAL)
+        self.refresh_btn.config(state=tk.NORMAL)
+        translated_mods_path = find_translated_mods_directory(self.current_path)
+        if translated_mods_path:
+            set_translated_mods_path(translated_mods_path)
+            self.open_translated_btn.config(state=tk.NORMAL)
+            self.set_status_message(
+                f"Папка: {self.current_path} | TranslatedMods найден: {translated_mods_path}",
+                color="green"
+            )
+        else:
+            self.open_translated_btn.config(state=tk.DISABLED)
+            self.set_status_message(
+                f"Папка: {self.current_path} | TranslatedMods не найден",
+                color="green"
+            )
+
+    def refresh_check(self):
+        """Повторно сканирует уже выбранную папку без диалога."""
+        if self.current_path:
+            self.start_check()
+
+    def open_translated_mods_folder(self):
+        """Открывает папку TranslatedMods в проводнике."""
+        if TRANSLATED_MODS_PATH and TRANSLATED_MODS_PATH.exists():
+            if platform.system() == "Windows":
+                subprocess.Popen(["explorer", str(TRANSLATED_MODS_PATH)])
+            elif platform.system() == "Darwin":
+                subprocess.Popen(["open", str(TRANSLATED_MODS_PATH)])
+            else:
+                subprocess.Popen(["xdg-open", str(TRANSLATED_MODS_PATH)])
+        else:
+            messagebox.showwarning("TranslatedMods", "Папка TranslatedMods не найдена или не настроена.")
+
     def select_directory(self):
         """Открывает диалог выбора директории."""
         directory = filedialog.askdirectory(title="Выберите папку с .jar файлами модов")
@@ -1559,17 +1688,20 @@ class LocalizationCheckerGUI:
             self.current_path = Path(directory)
             self.select_btn.config(text=f"📁 {self.current_path.name}")
             self.check_btn.config(state=tk.NORMAL)
+            self.refresh_btn.config(state=tk.NORMAL)
             self.set_status_message(f"Папка выбрана: {self.current_path}", color="black")
             
             # Автоматически ищем папку TranslatedMods
             translated_mods_path = find_translated_mods_directory(self.current_path)
             if translated_mods_path:
                 set_translated_mods_path(translated_mods_path)
+                self.open_translated_btn.config(state=tk.NORMAL)
                 self.set_status_message(
                     f"Папка выбрана: {self.current_path} | TranslatedMods найден: {translated_mods_path}", 
                     color="green"
                 )
             else:
+                self.open_translated_btn.config(state=tk.DISABLED)
                 self.set_status_message(
                     f"Папка выбрана: {self.current_path} | TranslatedMods не найден", 
                     color="green"
@@ -1624,12 +1756,20 @@ class LocalizationCheckerGUI:
         
         # Применяем фильтр для отображения результатов
         self.apply_filter()
+
+        # Обновляем названия вкладок с количеством
+        self.notebook.tab(0, text=f"[100%] Полный ({len(self.results['full'])})")
+        self.notebook.tab(1, text=f"[Частично] Неполный ({len(self.results['partial'])})")
+        self.notebook.tab(2, text=f"[Нет] Отсутствует ({len(self.results['missing'])})")
+        self.notebook.tab(3, text=f"[Переведён] ({len(self.results.get('translated', []))})")
+        self.notebook.tab(4, text=f"[Устарел] ({len(self.results.get('outdated', []))})")
         
         # Обновляем статус
         translated_count = len(self.results.get("translated", []))
-        total = len(self.results["full"]) + len(self.results["partial"]) + len(self.results["missing"]) + translated_count
+        outdated_count = len(self.results.get("outdated", []))
+        total = len(self.results["full"]) + len(self.results["partial"]) + len(self.results["missing"]) + translated_count + outdated_count
         self.set_status_message(
-            f"Всего: {total} | [100%]: {len(self.results['full'])} | [Частично]: {len(self.results['partial'])} | [Нет]: {len(self.results['missing'])} | Переведён: {translated_count}",
+            f"Всего: {total} | [100%]: {len(self.results['full'])} | [Частично]: {len(self.results['partial'])} | [Нет]: {len(self.results['missing'])} | Переведён: {translated_count} | Устарел: {outdated_count}",
             color="green"
         )
         
@@ -1719,6 +1859,8 @@ class LocalizationCheckerGUI:
             self.missing_tree.delete(item)
         for item in self.translated_tree.get_children():
             self.translated_tree.delete(item)
+        for item in self.outdated_tree.get_children():
+            self.outdated_tree.delete(item)
         
         if not self.results:
             return
@@ -1780,82 +1922,248 @@ class LocalizationCheckerGUI:
                 mod["en_keys"],
                 f"{mod['percentage']}%"
             ), tags=(self.get_source_tag(mod.get("source", "none")),))
+
+        # Показываем результаты - Устаревший перевод (из TranslatedMods, но не 100%)
+        outdated_filtered = [mod for mod in self.results.get("outdated", [])
+                             if search_text in mod["mod_name"].lower()]
+        sort_col = self.sort_state["outdated"]["column"] or "Мод"
+        outdated_sorted = self.sort_results(outdated_filtered, sort_col, self.sort_state["outdated"]["reverse"])
+
+        for mod in outdated_sorted:
+            missing_count = len(mod["missing_keys"])
+            self.outdated_tree.insert("", tk.END, values=(
+                mod["mod_name"],
+                mod["ru_keys"],
+                mod["en_keys"],
+                f"{mod['percentage']}%",
+                f"{missing_count} ключей"
+            ), tags=(self.get_source_tag(mod.get("source", "none")),))
     
     def show_details(self, tree):
-        """Показывает детали выбранного мода."""
+        """Показывает детали выбранного мода в структурированном окне."""
         selection = tree.selection()
         if not selection:
             return
-        
-        item = tree.item(selection[0])
-        mod_name = item["values"][0]
-        
-        # Находим полную информацию о моде
+
+        mod_name = tree.item(selection[0])["values"][0]
+
         mod_info = None
-        for category in ["full", "partial", "missing", "translated"]:
+        for category in ["full", "partial", "missing", "translated", "outdated"]:
             for mod in self.results[category]:
                 if mod["mod_name"] == mod_name:
                     mod_info = mod
                     break
             if mod_info:
                 break
-        
+
         if not mod_info:
             return
-        
-        # Создаем окно с деталями
-        detail_window = tk.Toplevel(self.root)
-        detail_window.title(f"Детали: {mod_name}")
-        detail_window.geometry("600x400")
-        
-        text_widget = tk.Text(detail_window, wrap=tk.WORD, font=("Consolas", 10))
-        text_widget.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
-        # Применим тему к окну деталей
-        if self.dark_mode:
-            dark_bg = "#1e1e1e"
-            dark_fg = "white"
-            try:
-                detail_window.config(bg=dark_bg)
-                text_widget.config(bg=dark_bg, fg=dark_fg, insertbackground=dark_fg)
-            except Exception:
-                pass
-        else:
-            try:
-                detail_window.config(bg="#ffffff")
-                text_widget.config(bg="white", fg="black", insertbackground="black")
-            except Exception:
-                pass
-        
-        details = f"Мод: {mod_info['mod_name']}\n"
-        details += f"Статус: {mod_info['status']}\n"
-        details += f"Источник: {mod_info.get('source', 'none')}\n"
-        details += f"Ключей в RU: {mod_info['ru_keys']}\n"
-        details += f"Ключей в EN: {mod_info['en_keys']}\n"
-        details += f"Процент: {mod_info['percentage']}%\n\n"
-        
-        if mod_info.get("missing_keys"):
-            details += f"❌ Недостающие ключи ({len(mod_info['missing_keys'])}):\n"
-            for key in mod_info["missing_keys"][:20]:  # Показываем первые 20
-                details += f"   - {key}\n"
-            if len(mod_info["missing_keys"]) > 20:
-                details += f"   ... и еще {len(mod_info['missing_keys']) - 20}\n"
-        
-        if mod_info.get("extra_keys"):
-            details += f"\n✅ Лишние ключи (сохранены для совместимости) ({len(mod_info['extra_keys'])}):\n"
-            for key in mod_info["extra_keys"][:20]:  # Показываем первые 20
-                details += f"   - {key}\n"
-            if len(mod_info["extra_keys"]) > 20:
-                details += f"   ... и еще {len(mod_info['extra_keys']) - 20}\n"
-        
+        # Цвета темы
+        bg      = "#1e1e1e" if self.dark_mode else "#f5f5f5"
+        fg      = "#e0e0e0" if self.dark_mode else "#1a1a1a"
+        hdr_bg  = "#2a2a2a" if self.dark_mode else "#dde3ec"
+        box_bg  = "#252525" if self.dark_mode else "#ffffff"
+        btn_bg  = "#3a3a3a" if self.dark_mode else "#dde3ec"
+        sep_col = "#444"    if self.dark_mode else "#c8c8c8"
+        pct_col = "#4caf50" if mod_info["percentage"] == 100 else ("#ff9800" if mod_info["percentage"] >= 50 else "#f44336")
+
+        win = tk.Toplevel(self.root)
+        win.title(f"Детали: {mod_name}")
+        win.geometry("820x520")
+        win.configure(bg=bg)
+        win.resizable(True, True)
+
+        # ── Шапка ──────────────────────────────────────────────────────────
+        hdr = tk.Frame(win, bg=hdr_bg, padx=14, pady=10)
+        hdr.pack(fill=tk.X)
+
+        tk.Label(hdr, text=mod_info["mod_name"], font=("Segoe UI", 11, "bold"),
+                 bg=hdr_bg, fg=fg, anchor="w").pack(fill=tk.X)
+
+        status_map = {"full": "✅ Полный", "partial": "⚠️ Неполный",
+                      "missing": "❌ Отсутствует", "translated": "🌐 Переведён", "outdated": "🔄 Устарел"}
+        source_map = {"jar": "встроен в JAR", "translated_mods": "TranslatedMods", "none": "—"}
+
+        meta_line = (
+            f"{status_map.get(mod_info['status'], mod_info['status'])}  │  "
+            f"Источник: {source_map.get(mod_info.get('source','none'), mod_info.get('source','—'))}  │  "
+            f"RU: {mod_info['ru_keys']}  │  EN: {mod_info['en_keys']}  │  "
+        )
+        meta_frame = tk.Frame(hdr, bg=hdr_bg)
+        meta_frame.pack(anchor="w", pady=(4, 0))
+        tk.Label(meta_frame, text=meta_line, font=("Segoe UI", 9),
+                 bg=hdr_bg, fg=fg).pack(side=tk.LEFT)
+        tk.Label(meta_frame, text=f"{mod_info['percentage']}%", font=("Segoe UI", 9, "bold"),
+                 bg=hdr_bg, fg=pct_col).pack(side=tk.LEFT)
+
         if mod_info.get("error"):
-            details += f"\n⚠️ Ошибка: {mod_info['error']}\n"
-        
-        text_widget.insert(tk.END, details)
-        text_widget.config(state=tk.DISABLED)
+            tk.Label(hdr, text=f"⚠️ {mod_info['error']}", font=("Segoe UI", 9),
+                     bg=hdr_bg, fg="#f44336", anchor="w").pack(fill=tk.X, pady=(4, 0))
 
-        # Разрешаем копирование выделенного текста через Ctrl+C в окне деталей
-        text_widget.bind("<Control-KeyPress>", lambda e, w=text_widget: self.on_copy_text_shortcut(e, w))
+        # ── Разделитель ─────────────────────────────────────────────────────
+        tk.Frame(win, bg=sep_col, height=1).pack(fill=tk.X)
+
+        # ── Две колонки ─────────────────────────────────────────────────────
+        cols_frame = tk.Frame(win, bg=bg)
+        cols_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        cols_frame.columnconfigure(0, weight=1)
+        cols_frame.columnconfigure(1, weight=1)
+
+        def make_key_column(parent, col, title, icon, keys, copy_label):
+            frame = tk.Frame(parent, bg=bg)
+            frame.grid(row=0, column=col, sticky="nsew", padx=(0 if col == 0 else 5, 0))
+
+            # Заголовок колонки + кнопка копирования
+            top = tk.Frame(frame, bg=bg)
+            top.pack(fill=tk.X, pady=(0, 4))
+            tk.Label(top, text=f"{icon} {title} ({len(keys)})",
+                     font=("Segoe UI", 9, "bold"), bg=bg, fg=fg).pack(side=tk.LEFT)
+
+            def copy_all():
+                self.root.clipboard_clear()
+                self.root.clipboard_append("\n".join(keys))
+                self.show_temporary_status(f"Скопировано {len(keys)} ключей")
+
+            tk.Button(top, text=f"📋 {copy_label}", font=("Segoe UI", 8),
+                      bg=btn_bg, fg=fg, relief=tk.FLAT, padx=6, pady=2,
+                      activebackground=sep_col, activeforeground=fg,
+                      command=copy_all, state=tk.NORMAL if keys else tk.DISABLED
+                      ).pack(side=tk.RIGHT)
+
+            # Список с прокруткой
+            list_frame = tk.Frame(frame, bg=box_bg, relief=tk.FLAT, bd=1)
+            list_frame.pack(fill=tk.BOTH, expand=True)
+
+            scrollbar = tk.Scrollbar(list_frame)
+            scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+            listbox = tk.Listbox(
+                list_frame,
+                font=("Consolas", 9),
+                bg=box_bg, fg=fg,
+                selectbackground="#3a7bd5", selectforeground="white",
+                relief=tk.FLAT, bd=0,
+                yscrollcommand=scrollbar.set,
+                activestyle="none",
+                exportselection=False  # не сбрасывает выделение при потере фокуса
+            )
+            listbox.pack(fill=tk.BOTH, expand=True)
+            scrollbar.config(command=listbox.yview)
+
+            for key in keys:
+                listbox.insert(tk.END, f"  {key}")
+
+            if not keys:
+                listbox.insert(tk.END, "  (пусто)")
+                listbox.config(fg=sep_col)
+
+            # Ctrl+C копирует выделенные строки из listbox,
+            # не пропуская событие наверх к bind_all главного окна
+            def _copy_selection(event):
+                if not (event.state & 0x4):
+                    return None
+                if not self.is_copy_shortcut(event):
+                    return None
+                selected = listbox.curselection()
+                if selected:
+                    # Убираем ведущие пробелы, добавленные при вставке
+                    lines = [listbox.get(i).strip() for i in selected]
+                    self.root.clipboard_clear()
+                    self.root.clipboard_append("\n".join(lines))
+                    self.show_temporary_status(f"Скопировано {len(lines)} ключей")
+                return "break"  # останавливаем всплытие события
+
+            listbox.bind("<Control-KeyPress>", _copy_selection)
+
+            # Обновление цветов при смене темы
+            def _apply_theme():
+                is_dark    = self.dark_mode
+                new_bg     = "#1e1e1e" if is_dark else "#f5f5f5"
+                new_fg     = "#e0e0e0" if is_dark else "#1a1a1a"
+                new_box_bg = "#252525" if is_dark else "#ffffff"
+                new_btn_bg = "#3a3a3a" if is_dark else "#dde3ec"
+                new_sep    = "#444"    if is_dark else "#c8c8c8"
+
+                frame.config(bg=new_bg)
+                top.config(bg=new_bg)
+                list_frame.config(bg=new_box_bg)
+                listbox.config(bg=new_box_bg, fg=new_fg if keys else new_sep)
+
+                # Label и Button внутри top
+                for w in top.winfo_children():
+                    try:
+                        if isinstance(w, tk.Label):
+                            w.config(bg=new_bg, fg=new_fg)
+                        elif isinstance(w, tk.Button):
+                            w.config(bg=new_btn_bg, fg=new_fg,
+                                     activebackground=new_sep, activeforeground=new_fg)
+                    except Exception:
+                        pass
+
+            all_theme_callbacks.append(_apply_theme)
+
+        # Список колбэков обновления темы для всех виджетов окна
+        all_theme_callbacks = []
+
+        missing_keys = mod_info.get("missing_keys", [])
+        extra_keys   = mod_info.get("extra_keys", [])
+
+        make_key_column(cols_frame, 0, "Не хватает", "❌", missing_keys, "Скопировать всё")
+        # Вертикальный разделитель
+        tk.Frame(cols_frame, bg=sep_col, width=1).grid(row=0, column=0, sticky="nse", padx=(0, 5))
+        make_key_column(cols_frame, 1, "Лишние ключи", "➕", extra_keys, "Скопировать всё")
+
+        # Подписываемся на смену темы: перекрашиваем всё окно
+        def _on_theme_change():
+            is_dark    = self.dark_mode
+            new_bg     = "#1e1e1e" if is_dark else "#f5f5f5"
+            new_hdr_bg = "#2a2a2a" if is_dark else "#dde3ec"
+            new_fg     = "#e0e0e0" if is_dark else "#1a1a1a"
+            new_sep    = "#444"    if is_dark else "#c8c8c8"
+            new_pct    = "#4caf50" if mod_info["percentage"] == 100 else ("#ff9800" if mod_info["percentage"] >= 50 else "#f44336")
+
+            win.configure(bg=new_bg)
+            cols_frame.configure(bg=new_bg)
+
+            # Шапка и все её дочерние виджеты
+            hdr.configure(bg=new_hdr_bg)
+            for w in hdr.winfo_children():
+                try:
+                    w.configure(bg=new_hdr_bg, fg=new_fg)
+                except Exception:
+                    pass
+                for ww in w.winfo_children():
+                    try:
+                        # Метка с процентом — особый цвет
+                        text = ww.cget("text") if hasattr(ww, "cget") else ""
+                        if "%" in str(text):
+                            ww.configure(bg=new_hdr_bg, fg=new_pct)
+                        else:
+                            ww.configure(bg=new_hdr_bg, fg=new_fg)
+                    except Exception:
+                        pass
+
+            # Разделительная линия под шапкой
+            for w in win.winfo_children():
+                try:
+                    if isinstance(w, tk.Frame) and w not in (hdr, cols_frame):
+                        w.configure(bg=new_sep)
+                except Exception:
+                    pass
+
+            # Колонки — через зарегистрированные колбэки
+            for cb in all_theme_callbacks:
+                cb()
+
+        # Регистрируем колбэк; при закрытии окна — снимаем
+        self._detail_theme_callbacks = getattr(self, "_detail_theme_callbacks", [])
+        self._detail_theme_callbacks.append(_on_theme_change)
+        win.protocol("WM_DELETE_WINDOW", lambda: (
+            self._detail_theme_callbacks.remove(_on_theme_change)
+            if _on_theme_change in self._detail_theme_callbacks else None,
+            win.destroy()
+        ))
 
     def on_copy_text_shortcut(self, event, text_widget):
         """Обрабатывает Ctrl+C в окне деталей."""
@@ -1891,14 +2199,16 @@ class LocalizationCheckerGUI:
         if not file_path:
             return
         
+        outdated_count = len(self.results.get("outdated", []))
         output_data = {
             "scan_directory": str(self.current_path),
-            "total_mods": len(self.results["full"]) + len(self.results["partial"]) + len(self.results["missing"]) + len(self.results.get("translated", [])),
+            "total_mods": len(self.results["full"]) + len(self.results["partial"]) + len(self.results["missing"]) + len(self.results.get("translated", [])) + outdated_count,
             "summary": {
                 "full_translation": len(self.results["full"]),
                 "partial_translation": len(self.results["partial"]),
                 "missing_translation": len(self.results["missing"]),
-                "translated_mods": len(self.results.get("translated", []))
+                "translated_mods": len(self.results.get("translated", [])),
+                "outdated_translation": outdated_count
             },
             "mods": self.results
         }
@@ -1913,8 +2223,12 @@ class LocalizationCheckerGUI:
 
 def main_gui():
     """Запускает графический интерфейс."""
-    load_config()  # Загружаем конфигурацию при запуске
-    root = tk.Tk()
+    load_config()
+    try:
+        from tkinterdnd2 import TkinterDnD
+        root = TkinterDnD.Tk()
+    except ImportError:
+        root = tk.Tk()
     app = LocalizationCheckerGUI(root)
     root.mainloop()
 
