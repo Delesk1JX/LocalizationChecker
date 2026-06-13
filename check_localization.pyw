@@ -530,10 +530,11 @@ def find_ru_ru_in_translated_mods(mod_name: str) -> Optional[Path]:
     Returns:
         Путь к файлу локализации (.json или .lang) или None если не найден
     """
-    if TRANSLATED_MODS_PATH is None:
+    if TRANSLATED_MODS_PATH is None or not TRANSLATED_MODS_PATH.exists():
         return None
-    
-    # mod_name уже является чистым именем мода из assets
+
+    # Только точное совпадение: папка в TranslatedMods должна называться ровно так же,
+    # как assets-имя мода. Нечёткий поиск давал ложные срабатывания.
     mod_dir = TRANSLATED_MODS_PATH / mod_name
     if mod_dir.exists() and mod_dir.is_dir():
         ru_ru_path = mod_dir / "lang" / "ru_ru.json"
@@ -542,61 +543,7 @@ def find_ru_ru_in_translated_mods(mod_name: str) -> Optional[Path]:
         ru_lang_path = mod_dir / "lang" / "ru_RU.lang"
         if ru_lang_path.exists():
             return ru_lang_path
-    
-    # Если точное совпадение не найдено, ищем по более строгим правилам.
-    # Избегаем ложных совпадений для очень коротких имен, например 'aq'.
-    if TRANSLATED_MODS_PATH.exists():
-        for item in TRANSLATED_MODS_PATH.iterdir():
-            if item.is_dir():
-                # Проверяем, содержит ли название папки название мода или наоборот.
-                # Применяем правило только для длинных имен, чтобы не сопоставлять 'aq' с 'aquaculture'.
-                if len(mod_name) > 3 and len(item.name) > 3:
-                    if mod_name.lower() in item.name.lower() or item.name.lower() in mod_name.lower():
-                        # Сначала ищем JSON
-                        ru_ru_path = item / "lang" / "ru_ru.json"
-                        if ru_ru_path.exists():
-                            return ru_ru_path
-                        # Затем ищем .lang
-                        ru_lang_path = item / "lang" / "ru_RU.lang"
-                        if ru_lang_path.exists():
-                            return ru_lang_path
-        
-        # Дополнительная проверка: если имя папки является аббревиатурой или префиксом
-        # Например, ali -> advancedlootinfo (a-l-i первые буквы слов)
-        # Разбиваем mod_name на слова (по подчеркиваниям или дефисам)
-        words = re.split(r'[_-]', mod_name.lower())
-        if len(words) == 1:
-            # Если одно слово, пробуем разбить по буквам
-            words = re.findall(r'[a-z]+', mod_name.lower())
-        
-        # Создаем аббревиатуру из первых букв слов
-        if len(words) > 1:
-            abbrev = ''.join([w[0] for w in words if w])
-            for item in TRANSLATED_MODS_PATH.iterdir():
-                if item.is_dir() and item.name.lower() == abbrev:
-                    # Сначала ищем JSON
-                    ru_ru_path = item / "lang" / "ru_ru.json"
-                    if ru_ru_path.exists():
-                        return ru_ru_path
-                    # Затем ищем .lang
-                    ru_lang_path = item / "lang" / "ru_RU.lang"
-                    if ru_lang_path.exists():
-                        return ru_lang_path
-        
-        # Также проверяем, начинается ли mod_name с названия папки.
-        # Но только для более длинных имен, чтобы избежать неправильных совпадений.
-        for item in TRANSLATED_MODS_PATH.iterdir():
-            if item.is_dir() and len(item.name) > 3 and len(mod_name) > 4:
-                if mod_name.lower().startswith(item.name.lower()):
-                    # Сначала ищем JSON
-                    ru_ru_path = item / "lang" / "ru_ru.json"
-                    if ru_ru_path.exists():
-                        return ru_ru_path
-                    # Затем ищем .lang
-                    ru_lang_path = item / "lang" / "ru_RU.lang"
-                    if ru_lang_path.exists():
-                        return ru_lang_path
-    
+
     return None
 
 
@@ -1723,9 +1670,16 @@ class LocalizationCheckerGUI:
         if not self.current_path:
             messagebox.showwarning("Предупреждение", "Сначала выберите папку с модами")
             return
-        
+
+        # Не запускать новое сканирование если уже идёт
+        if getattr(self, '_scanning', False):
+            return
+
+        self._scanning = True
         self.check_btn.config(state=tk.DISABLED)
+        self.refresh_btn.config(state=tk.DISABLED)
         self.select_btn.config(state=tk.DISABLED)
+        self.export_btn.config(state=tk.DISABLED)
         self.progress_bar['value'] = 0
         self.progress_label.config(text="Начало проверки...")
         
@@ -1837,7 +1791,9 @@ class LocalizationCheckerGUI:
 
     def check_complete(self):
         """Завершение проверки."""
+        self._scanning = False
         self.check_btn.config(state=tk.NORMAL)
+        self.refresh_btn.config(state=tk.NORMAL)
         self.select_btn.config(state=tk.NORMAL)
         self.export_btn.config(state=tk.NORMAL)
         self.progress_label.config(text="Проверка завершена")
