@@ -711,6 +711,132 @@ def extract_json_from_jar(jar_path: Path, lang_path: str) -> Optional[Dict[str, 
         return None
 
 
+def check_patchouli_books(jar_path: Path) -> List[Dict[str, Any]]:
+    """
+    Проверяет наличие русской локализации для Patchouli гайдбуков внутри .jar архива.
+
+    Patchouli хранит страницы гайдбука как отдельные .json файлы по пути:
+      assets/<modname>/patchouli_books/<bookname>/<lang>/entries/...
+      assets/<modname>/patchouli_books/<bookname>/<lang>/categories/...
+
+    Логика простая (вариант 1): сравниваем наличие файлов в en_us/ vs ru_ru/.
+
+    Returns:
+        Список словарей — по одному на каждый найденный гайдбук.
+    """
+    results = []
+    try:
+        with zipfile.ZipFile(jar_path, 'r') as jar_file:
+            all_names = jar_file.namelist()
+    except zipfile.BadZipFile:
+        return results
+
+    # Собираем все пути внутри patchouli_books
+    patchouli_files = [
+        name.replace('\\', '/') for name in all_names
+        if 'patchouli_books' in name.replace('\\', '/').lower()
+    ]
+
+    if not patchouli_files:
+        return results
+
+    # Группируем по (mod_name, book_name)
+    books: Dict[str, Dict[str, set]] = {}
+    for raw_path in patchouli_files:
+        path = raw_path.replace('\\', '/')
+        parts = path.split('/')
+        # Ожидаем: assets/<mod>/patchouli_books/<book>/<lang>/...
+        try:
+            assets_idx = next(i for i, p in enumerate(parts) if p.lower() == 'assets')
+            pb_idx     = next(i for i, p in enumerate(parts) if p.lower() == 'patchouli_books')
+        except StopIteration:
+            continue
+
+        if pb_idx - assets_idx != 2:
+            continue
+        if len(parts) <= pb_idx + 2:
+            continue
+
+        mod_name  = parts[assets_idx + 1]
+        book_name = parts[pb_idx + 1]
+        lang_raw  = parts[pb_idx + 2]
+        lang      = lang_raw.lower()
+        # Остаток пути — сам файл
+        rest = '/'.join(parts[pb_idx + 3:])
+
+        if not rest or rest.endswith('/'):
+            continue  # папка, не файл
+
+        key = f"{mod_name}/{book_name}"
+        if key not in books:
+            books[key] = {'mod_name': mod_name, 'book_name': book_name,
+                          'en_files': set(), 'ru_files': set()}
+
+        # Сравниваем без учёта регистра: en_us == en_US, ru_ru == ru_RU
+        if lang in ('en_us',):
+            books[key]['en_files'].add(rest)
+        elif lang in ('ru_ru',):
+            books[key]['ru_files'].add(rest)
+
+    for key, book in books.items():
+        en_files = book['en_files']
+        ru_files = book['ru_files']
+
+        if not en_files:
+            continue  # нет английской версии — нечего проверять
+
+        missing = sorted(en_files - ru_files)
+        extra   = sorted(ru_files - en_files)
+        translated_count = len(en_files & ru_files)
+        total   = len(en_files)
+        percentage = round((translated_count / total) * 100, 2) if total > 0 else 0.0
+
+        if percentage == 100.0:
+            status = 'full'
+        elif percentage > 0:
+            status = 'partial'
+        else:
+            status = 'missing'
+
+        # Проверяем TranslatedMods/<mod>/patchouli_books/<book>/ru_ru/
+        # и дополняем ru_files файлами оттуда
+        final_ru_count = len(ru_files)
+        if TRANSLATED_MODS_PATH is not None and TRANSLATED_MODS_PATH.exists():
+            tm_ru_dir = TRANSLATED_MODS_PATH / book['mod_name'] / "patchouli_books" / book['book_name'] / "ru_ru"
+            if tm_ru_dir.exists():
+                tm_ru_files = set()
+                for f in tm_ru_dir.rglob("*"):
+                    if f.is_file():
+                        rel = f.relative_to(tm_ru_dir).as_posix()
+                        tm_ru_files.add(rel)
+                combined_ru = ru_files | tm_ru_files
+                final_ru_count = len(combined_ru)
+                missing  = sorted(en_files - combined_ru)
+                extra    = sorted(combined_ru - en_files)
+                translated_count = len(en_files & combined_ru)
+                percentage = round((translated_count / total) * 100, 2) if total > 0 else 0.0
+                if percentage == 100.0:
+                    status = 'full'
+                elif percentage > 0:
+                    status = 'partial'
+                else:
+                    status = 'missing'
+
+        results.append({
+            'mod_name':      book['mod_name'],
+            'book_name':     book['book_name'],
+            'status':        status,
+            'en_files':      total,
+            'ru_files':      final_ru_count,
+            'percentage':    percentage,
+            'missing_files': missing,
+            'extra_files':   extra,
+        })
+
+    return results
+
+
+
 def _is_preferred_asset_lang_path(path: str) -> bool:
     """Возвращает True для пути вида assets/<modid>/lang/<file>, assets/<modid>/language/<file> или assets/<modid>/lang_nei/<file>."""
     normalized = path.replace('\\', '/').lower()
@@ -811,7 +937,8 @@ def check_mod_localization(jar_path: Path, mod_name: str, mod_info: Dict[str, An
         'percentage': 0.0,
         'missing_keys': [],
         'extra_keys': [],
-        'error': None
+        'error': None,
+        'patchouli': []
     }
 
     en_us_path, ru_ru_path, en_lang_path, ru_lang_path, has_lang_dir, has_lang_files = _select_mod_lang_paths(mod_info)
@@ -906,7 +1033,31 @@ def check_jar_localization(jar_path: Path) -> List[Dict[str, Any]]:
     """
     mods_info = find_mod_lang_files_in_archive(jar_path)
 
+    # Проверяем Patchouli гайдбуки (один раз на весь jar)
+    patchouli_books = check_patchouli_books(jar_path)
+    # Индексируем по mod_name для быстрого поиска
+    patchouli_by_mod: Dict[str, List[Dict]] = {}
+    for book in patchouli_books:
+        patchouli_by_mod.setdefault(book['mod_name'], []).append(book)
+
     if not mods_info:
+        # Если обычной локализации нет, но есть Patchouli — всё равно возвращаем результат
+        if patchouli_books:
+            results = []
+            for mod_name, books in patchouli_by_mod.items():
+                results.append({
+                    "mod_name": f"{jar_path.name} ({mod_name})",
+                    "status": "skipped",
+                    "source": "none",
+                    "ru_keys": 0,
+                    "en_keys": 0,
+                    "percentage": 0.0,
+                    "missing_keys": [],
+                    "extra_keys": [],
+                    "error": "Только Patchouli гайдбук (нет стандартной локализации)",
+                    "patchouli": books
+                })
+            return results
         return [{
             "mod_name": jar_path.name,
             "status": "skipped",
@@ -921,7 +1072,10 @@ def check_jar_localization(jar_path: Path) -> List[Dict[str, Any]]:
 
     results: List[Dict[str, Any]] = []
     for mod_name, mod_info in sorted(mods_info.items()):
-        results.append(check_mod_localization(jar_path, mod_name, mod_info))
+        mod_result = check_mod_localization(jar_path, mod_name, mod_info)
+        # Прикрепляем данные Patchouli если они есть для этого мода
+        mod_result['patchouli'] = patchouli_by_mod.get(mod_name, [])
+        results.append(mod_result)
 
     return results
 
@@ -1175,6 +1329,18 @@ class LocalizationCheckerGUI:
 
         return tree
     
+    def get_patchouli_badge(self, mod: Dict) -> str:
+        """Возвращает иконку статуса Patchouli гайдбука для отображения в таблице."""
+        books = mod.get("patchouli", [])
+        if not books:
+            return ""
+        # Берём наихудший статус среди всех книг
+        if any(b["status"] == "missing" for b in books):
+            return "  📖❌"
+        if any(b["status"] == "partial" for b in books):
+            return "  📖⚠️"
+        return "  📖✅"
+
     def get_tree_category(self, tree):
         """Определяет категорию дерева по объекту."""
         if tree == self.full_tree:
@@ -1802,6 +1968,17 @@ class LocalizationCheckerGUI:
         """Обработчик изменения текста поиска."""
         self.apply_filter()
     
+    def get_patchouli_badge(self, mod: dict) -> str:
+        """Возвращает иконку-бейдж Patchouli для отображения в таблице рядом с именем мода."""
+        books = mod.get("patchouli", [])
+        if not books:
+            return ""
+        if all(b["status"] == "full" for b in books):
+            return "  📖✅"
+        if any(b["status"] != "missing" for b in books):
+            return "  📖⚠️"
+        return "  📖❌"
+
     def apply_filter(self):
         """Применяет фильтр поиска и сортировку к таблицам."""
         search_text = self.search_var.get().lower()
@@ -1829,7 +2006,7 @@ class LocalizationCheckerGUI:
         
         for mod in full_sorted:
             self.full_tree.insert("", tk.END, values=(
-                mod["mod_name"],
+                mod["mod_name"] + self.get_patchouli_badge(mod),
                 mod["ru_keys"],
                 mod["en_keys"],
                 f"{mod['percentage']}%"
@@ -1844,7 +2021,7 @@ class LocalizationCheckerGUI:
         for mod in partial_sorted:
             missing_count = len(mod["missing_keys"])
             self.partial_tree.insert("", tk.END, values=(
-                mod["mod_name"],
+                mod["mod_name"] + self.get_patchouli_badge(mod),
                 mod["ru_keys"],
                 mod["en_keys"],
                 f"{mod['percentage']}%",
@@ -1860,7 +2037,7 @@ class LocalizationCheckerGUI:
         for mod in missing_sorted:
             reason = mod.get("error", "Нет ru_ru.json")
             self.missing_tree.insert("", tk.END, values=(
-                mod["mod_name"],
+                mod["mod_name"] + self.get_patchouli_badge(mod),
                 mod["en_keys"],
                 reason
             ), tags=(self.get_source_tag(mod.get("source", "none")),))
@@ -1873,7 +2050,7 @@ class LocalizationCheckerGUI:
 
         for mod in translated_sorted:
             self.translated_tree.insert("", tk.END, values=(
-                mod["mod_name"],
+                mod["mod_name"] + self.get_patchouli_badge(mod),
                 mod["ru_keys"],
                 mod["en_keys"],
                 f"{mod['percentage']}%"
@@ -1888,7 +2065,7 @@ class LocalizationCheckerGUI:
         for mod in outdated_sorted:
             missing_count = len(mod["missing_keys"])
             self.outdated_tree.insert("", tk.END, values=(
-                mod["mod_name"],
+                mod["mod_name"] + self.get_patchouli_badge(mod),
                 mod["ru_keys"],
                 mod["en_keys"],
                 f"{mod['percentage']}%",
@@ -1901,7 +2078,9 @@ class LocalizationCheckerGUI:
         if not selection:
             return
 
-        mod_name = tree.item(selection[0])["values"][0]
+        mod_name_raw = tree.item(selection[0])["values"][0]
+        # Убираем badge Patchouli который добавляется при отображении
+        mod_name = mod_name_raw.split("  📖")[0] if "  📖" in str(mod_name_raw) else mod_name_raw
 
         mod_info = None
         for category in ["full", "partial", "missing", "translated", "outdated"]:
@@ -1918,9 +2097,9 @@ class LocalizationCheckerGUI:
         # Цвета темы
         bg      = "#1e1e1e" if self.dark_mode else "#f5f5f5"
         fg      = "#e0e0e0" if self.dark_mode else "#1a1a1a"
-        hdr_bg  = "#2a2a2a" if self.dark_mode else "#dde3ec"
+        hdr_bg  = "#2a2a2a" if self.dark_mode else "#c8d0de"
         box_bg  = "#252525" if self.dark_mode else "#ffffff"
-        btn_bg  = "#3a3a3a" if self.dark_mode else "#dde3ec"
+        btn_bg  = "#3a3a3a" if self.dark_mode else "#b8c4d4"
         sep_col = "#444"    if self.dark_mode else "#c8c8c8"
         pct_col = "#4caf50" if mod_info["percentage"] == 100 else ("#ff9800" if mod_info["percentage"] >= 50 else "#f44336")
 
@@ -1960,17 +2139,30 @@ class LocalizationCheckerGUI:
         # ── Разделитель ─────────────────────────────────────────────────────
         tk.Frame(win, bg=sep_col, height=1).pack(fill=tk.X)
 
-        # ── Две колонки ─────────────────────────────────────────────────────
-        cols_frame = tk.Frame(win, bg=bg)
+        # ── Переключатель вкладок ───────────────────────────────────────────
+        patchouli_books = mod_info.get("patchouli", [])
+        tab_bar = tk.Frame(win, bg=hdr_bg)
+        tab_bar.pack(fill=tk.X)
+
+        # Контейнер для содержимого вкладки
+        content_host = tk.Frame(win, bg=bg)
+        content_host.pack(fill=tk.BOTH, expand=True)
+
+        # ── Вкладка 1: Ключи локализации ────────────────────────────────────
+        keys_frame = tk.Frame(content_host, bg=bg)
+
+        cols_frame = tk.Frame(keys_frame, bg=bg)
         cols_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         cols_frame.columnconfigure(0, weight=1)
         cols_frame.columnconfigure(1, weight=1)
+
+        # Список колбэков обновления темы — определяем ДО make_key_column
+        all_theme_callbacks = []
 
         def make_key_column(parent, col, title, icon, keys, copy_label):
             frame = tk.Frame(parent, bg=bg)
             frame.grid(row=0, column=col, sticky="nsew", padx=(0 if col == 0 else 5, 0))
 
-            # Заголовок колонки + кнопка копирования
             top = tk.Frame(frame, bg=bg)
             top.pack(fill=tk.X, pady=(0, 4))
             tk.Label(top, text=f"{icon} {title} ({len(keys)})",
@@ -1987,7 +2179,6 @@ class LocalizationCheckerGUI:
                       command=copy_all, state=tk.NORMAL if keys else tk.DISABLED
                       ).pack(side=tk.RIGHT)
 
-            # Список с прокруткой
             list_frame = tk.Frame(frame, bg=box_bg, relief=tk.FLAT, bd=1)
             list_frame.pack(fill=tk.BOTH, expand=True)
 
@@ -2002,20 +2193,17 @@ class LocalizationCheckerGUI:
                 relief=tk.FLAT, bd=0,
                 yscrollcommand=scrollbar.set,
                 activestyle="none",
-                exportselection=False  # не сбрасывает выделение при потере фокуса
+                exportselection=False
             )
             listbox.pack(fill=tk.BOTH, expand=True)
             scrollbar.config(command=listbox.yview)
 
             for key in keys:
                 listbox.insert(tk.END, f"  {key}")
-
             if not keys:
                 listbox.insert(tk.END, "  (пусто)")
                 listbox.config(fg=sep_col)
 
-            # Ctrl+C копирует выделенные строки из listbox,
-            # не пропуская событие наверх к bind_all главного окна
             def _copy_selection(event):
                 if not (event.state & 0x4):
                     return None
@@ -2023,16 +2211,14 @@ class LocalizationCheckerGUI:
                     return None
                 selected = listbox.curselection()
                 if selected:
-                    # Убираем ведущие пробелы, добавленные при вставке
                     lines = [listbox.get(i).strip() for i in selected]
                     self.root.clipboard_clear()
                     self.root.clipboard_append("\n".join(lines))
                     self.show_temporary_status(f"Скопировано {len(lines)} ключей")
-                return "break"  # останавливаем всплытие события
+                return "break"
 
             listbox.bind("<Control-KeyPress>", _copy_selection)
 
-            # Обновление цветов при смене темы
             def _apply_theme():
                 is_dark    = self.dark_mode
                 new_bg     = "#1e1e1e" if is_dark else "#f5f5f5"
@@ -2040,13 +2226,10 @@ class LocalizationCheckerGUI:
                 new_box_bg = "#252525" if is_dark else "#ffffff"
                 new_btn_bg = "#3a3a3a" if is_dark else "#dde3ec"
                 new_sep    = "#444"    if is_dark else "#c8c8c8"
-
                 frame.config(bg=new_bg)
                 top.config(bg=new_bg)
                 list_frame.config(bg=new_box_bg)
                 listbox.config(bg=new_box_bg, fg=new_fg if keys else new_sep)
-
-                # Label и Button внутри top
                 for w in top.winfo_children():
                     try:
                         if isinstance(w, tk.Label):
@@ -2059,18 +2242,141 @@ class LocalizationCheckerGUI:
 
             all_theme_callbacks.append(_apply_theme)
 
-        # Список колбэков обновления темы для всех виджетов окна
-        all_theme_callbacks = []
-
         missing_keys = mod_info.get("missing_keys", [])
         extra_keys   = mod_info.get("extra_keys", [])
 
         make_key_column(cols_frame, 0, "Не хватает", "❌", missing_keys, "Скопировать всё")
-        # Вертикальный разделитель
         tk.Frame(cols_frame, bg=sep_col, width=1).grid(row=0, column=0, sticky="nse", padx=(0, 5))
         make_key_column(cols_frame, 1, "Лишние ключи", "➕", extra_keys, "Скопировать всё")
 
-        # Подписываемся на смену темы: перекрашиваем всё окно
+        # ── Вкладка 2: Patchouli гайдбуки ───────────────────────────────────
+        pb_outer = tk.Frame(content_host, bg=bg)
+
+        pb_canvas = tk.Canvas(pb_outer, bg=bg, highlightthickness=0)
+        pb_scroll = tk.Scrollbar(pb_outer, orient=tk.VERTICAL, command=pb_canvas.yview)
+        pb_canvas.configure(yscrollcommand=pb_scroll.set)
+        pb_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        pb_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        pb_inner = tk.Frame(pb_canvas, bg=bg)
+        pb_canvas_window = pb_canvas.create_window((0, 0), window=pb_inner, anchor="nw")
+
+        def _resize_canvas(event):
+            pb_canvas.itemconfig(pb_canvas_window, width=event.width)
+        pb_canvas.bind("<Configure>", _resize_canvas)
+
+        def _update_scroll(event):
+            pb_canvas.configure(scrollregion=pb_canvas.bbox("all"))
+        pb_inner.bind("<Configure>", _update_scroll)
+
+        if patchouli_books:
+            for book in patchouli_books:
+                b_pct   = book['percentage']
+                b_color = "#4caf50" if b_pct == 100 else ("#ff9800" if b_pct >= 50 else "#f44336")
+                b_icon  = "✅" if b_pct == 100 else ("⚠️" if b_pct > 0 else "❌")
+
+                card = tk.Frame(pb_inner, bg=hdr_bg, padx=10, pady=6)
+                card.pack(fill=tk.X, padx=10, pady=(8, 0))
+
+                title_row = tk.Frame(card, bg=hdr_bg)
+                title_row.pack(fill=tk.X)
+                tk.Label(title_row, text=f"{b_icon} {book['book_name']}",
+                         font=("Segoe UI", 10, "bold"), bg=hdr_bg, fg=fg).pack(side=tk.LEFT)
+                tk.Label(title_row,
+                         text=f"  {b_pct}%  ({book['en_files'] - len(book['missing_files'])}/{book['en_files']} страниц)",
+                         font=("Segoe UI", 9), bg=hdr_bg, fg=b_color).pack(side=tk.LEFT)
+
+                if book['missing_files']:
+                    missing_lf = tk.Frame(card, bg=box_bg)
+                    missing_lf.pack(fill=tk.X, pady=(4, 0))
+
+                    # Заголовок + кнопка копирования
+                    lf_top = tk.Frame(missing_lf, bg=box_bg)
+                    lf_top.pack(fill=tk.X)
+                    tk.Label(lf_top, text=f"  Отсутствующие файлы ({len(book['missing_files'])}):",
+                             font=("Segoe UI", 8), bg=box_bg, fg=sep_col, anchor="w").pack(side=tk.LEFT)
+
+                    missing_files_ref = book['missing_files']
+
+                    def _copy_all_pb(files=missing_files_ref):
+                        self.root.clipboard_clear()
+                        self.root.clipboard_append("\n".join(files))
+                        self.show_temporary_status(f"Скопировано {len(files)} файлов")
+
+                    tk.Button(lf_top, text="📋 Скопировать всё",
+                              font=("Segoe UI", 7), bg=btn_bg, fg=fg,
+                              relief=tk.FLAT, padx=4, pady=1,
+                              activebackground=sep_col, activeforeground=fg,
+                              command=_copy_all_pb).pack(side=tk.RIGHT, padx=4)
+
+                    lb = tk.Listbox(missing_lf, font=("Consolas", 8),
+                                    bg=box_bg, fg=fg,
+                                    selectbackground="#3a7bd5", selectforeground="white",
+                                    relief=tk.FLAT, bd=0,
+                                    height=min(6, len(book['missing_files'])),
+                                    activestyle="none", exportselection=False)
+                    lb.pack(fill=tk.X)
+                    for f in book['missing_files']:
+                        lb.insert(tk.END, f"  {f}")
+
+                    def _copy_pb_selection(event, listbox=lb):
+                        if not (event.state & 0x4):
+                            return None
+                        if not self.is_copy_shortcut(event):
+                            return None
+                        selected = listbox.curselection()
+                        if selected:
+                            lines = [listbox.get(i).strip() for i in selected]
+                            self.root.clipboard_clear()
+                            self.root.clipboard_append("\n".join(lines))
+                            self.show_temporary_status(f"Скопировано {len(lines)} файлов")
+                        return "break"
+
+                    lb.bind("<Control-KeyPress>", _copy_pb_selection)
+        else:
+            tk.Label(pb_inner, text="📖 Patchouli гайдбуков не обнаружено",
+                     font=("Segoe UI", 10), bg=bg, fg=sep_col).pack(pady=40)
+
+        # ── Кнопки вкладок ──────────────────────────────────────────────────
+        active_tab_bg   = bg
+        inactive_tab_bg = hdr_bg
+        tab_fg          = fg
+
+        pb_label = "📖 Гайдбук" if not patchouli_books else \
+            f"📖 Гайдбук ({'✅' if all(b['status']=='full' for b in patchouli_books) else '⚠️' if any(b['status']!='missing' for b in patchouli_books) else '❌'})"
+
+        tab_keys_btn = tk.Button(tab_bar, text="🔑 Ключи локализации",
+                                 font=("Segoe UI", 9), relief=tk.FLAT, padx=12, pady=5,
+                                 bg=active_tab_bg, fg=tab_fg, bd=0)
+        tab_pb_btn   = tk.Button(tab_bar, text=pb_label,
+                                 font=("Segoe UI", 9), relief=tk.FLAT, padx=12, pady=5,
+                                 bg=inactive_tab_bg, fg=tab_fg, bd=0)
+        tab_keys_btn.pack(side=tk.LEFT)
+        tab_pb_btn.pack(side=tk.LEFT)
+
+        # Нижняя черта активной вкладки
+        tab_indicator = tk.Frame(tab_bar, bg="#3a7bd5", height=2)
+        tab_indicator.place(in_=tab_keys_btn, relx=0, rely=1.0, relwidth=1.0, height=2, y=-2)
+
+        keys_frame.pack(fill=tk.BOTH, expand=True)
+
+        def show_keys_tab():
+            pb_outer.pack_forget()
+            keys_frame.pack(fill=tk.BOTH, expand=True)
+            tab_keys_btn.config(bg=active_tab_bg)
+            tab_pb_btn.config(bg=inactive_tab_bg)
+            tab_indicator.place(in_=tab_keys_btn, relx=0, rely=1.0, relwidth=1.0, height=2, y=-2)
+
+        def show_pb_tab():
+            keys_frame.pack_forget()
+            pb_outer.pack(fill=tk.BOTH, expand=True)
+            tab_keys_btn.config(bg=inactive_tab_bg)
+            tab_pb_btn.config(bg=active_tab_bg)
+            tab_indicator.place(in_=tab_pb_btn, relx=0, rely=1.0, relwidth=1.0, height=2, y=-2)
+
+        tab_keys_btn.config(command=show_keys_tab)
+        tab_pb_btn.config(command=show_pb_tab)
+
         def _on_theme_change():
             is_dark    = self.dark_mode
             new_bg     = "#1e1e1e" if is_dark else "#f5f5f5"
@@ -2080,9 +2386,17 @@ class LocalizationCheckerGUI:
             new_pct    = "#4caf50" if mod_info["percentage"] == 100 else ("#ff9800" if mod_info["percentage"] >= 50 else "#f44336")
 
             win.configure(bg=new_bg)
+            content_host.configure(bg=new_bg)
+            keys_frame.configure(bg=new_bg)
             cols_frame.configure(bg=new_bg)
+            pb_outer.configure(bg=new_bg)
+            pb_canvas.configure(bg=new_bg)
+            pb_inner.configure(bg=new_bg)
+            tab_bar.configure(bg=new_hdr_bg)
+            tab_keys_btn.configure(bg=new_bg if keys_frame.winfo_ismapped() else new_hdr_bg, fg=new_fg)
+            tab_pb_btn.configure(bg=new_bg if pb_outer.winfo_ismapped() else new_hdr_bg, fg=new_fg)
 
-            # Шапка и все её дочерние виджеты
+            # Шапка
             hdr.configure(bg=new_hdr_bg)
             for w in hdr.winfo_children():
                 try:
@@ -2091,7 +2405,6 @@ class LocalizationCheckerGUI:
                     pass
                 for ww in w.winfo_children():
                     try:
-                        # Метка с процентом — особый цвет
                         text = ww.cget("text") if hasattr(ww, "cget") else ""
                         if "%" in str(text):
                             ww.configure(bg=new_hdr_bg, fg=new_pct)
@@ -2100,15 +2413,27 @@ class LocalizationCheckerGUI:
                     except Exception:
                         pass
 
-            # Разделительная линия под шапкой
-            for w in win.winfo_children():
+            # Карточки гайдбуков в pb_inner
+            for card in pb_inner.winfo_children():
                 try:
-                    if isinstance(w, tk.Frame) and w not in (hdr, cols_frame):
-                        w.configure(bg=new_sep)
+                    card.configure(bg=new_hdr_bg)
+                    for w in card.winfo_children():
+                        try:
+                            if isinstance(w, tk.Frame):
+                                w.configure(bg=new_hdr_bg)
+                                for ww in w.winfo_children():
+                                    try:
+                                        ww.configure(bg=new_hdr_bg, fg=new_fg)
+                                    except Exception:
+                                        pass
+                            elif isinstance(w, tk.Label):
+                                w.configure(bg=new_hdr_bg, fg=new_fg)
+                        except Exception:
+                            pass
                 except Exception:
                     pass
 
-            # Колонки — через зарегистрированные колбэки
+            # Колонки ключей
             for cb in all_theme_callbacks:
                 cb()
 
