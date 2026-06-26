@@ -1139,17 +1139,25 @@ def scan_jars_directory(base_path: Path, progress_callback=None) -> Dict[str, Li
                 if jar_result["status"] == "skipped":
                     continue
 
+                # Если хотя бы один гайдбук не переведён полностью — понижаем статус
+                patchouli = jar_result.get("patchouli", [])
+                if patchouli and any(b["status"] != "full" for b in patchouli):
+                    if jar_result["status"] in ("full", "translated"):
+                        jar_result["status"] = "partial"
+
+                status = jar_result["status"]
+
                 # Моды из TranslatedMods со 100% — отдельная категория
                 # Моды из TranslatedMods с неполным переводом — "Устаревший перевод"
-                if jar_result["status"] == "translated":
+                if status == "translated":
                     results["translated"].append(jar_result)
-                elif jar_result.get("source") == "translated_mods" and jar_result["status"] == "partial":
+                elif jar_result.get("source") == "translated_mods" and status == "partial":
                     results["outdated"].append(jar_result)
-                elif jar_result["status"] == "full":
+                elif status == "full":
                     results["full"].append(jar_result)
-                elif jar_result["status"] == "partial":
+                elif status == "partial":
                     results["partial"].append(jar_result)
-                elif jar_result["status"] == "missing":
+                elif status == "missing":
                     results["missing"].append(jar_result)
     
     # Сортируем результаты по имени мода
