@@ -33,10 +33,12 @@ import os
 import re
 import sys
 import json
+import shutil
 import zipfile
 import argparse
 import threading
 import platform
+import logging
 import subprocess
 from pathlib import Path
 from typing import Dict, List, Tuple, Any, Optional, Callable
@@ -51,9 +53,153 @@ except ImportError:
     GUI_AVAILABLE = False
 
 
+# ──────────────────────────────────────────────────────────────────────────
+# Логирование: пишем и в файл (для разбора проблем), и в консоль (как раньше)
+# ──────────────────────────────────────────────────────────────────────────
+
+LOG_FILE_NAME = "localization_checker.log"
+
+logger = logging.getLogger("localization_checker")
+logger.setLevel(logging.DEBUG)
+logger.propagate = False
+
+if not logger.handlers:
+    _console_handler = logging.StreamHandler(sys.stdout)
+    _console_handler.setLevel(logging.WARNING)
+    _console_handler.setFormatter(logging.Formatter("%(message)s"))
+    logger.addHandler(_console_handler)
+
+    try:
+        _file_handler = logging.FileHandler(LOG_FILE_NAME, encoding="utf-8")
+        _file_handler.setLevel(logging.DEBUG)
+        _file_handler.setFormatter(logging.Formatter(
+            "%(asctime)s [%(levelname)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
+        ))
+        logger.addHandler(_file_handler)
+    except Exception:
+        # Если файл лога недоступен (например, папка только для чтения) —
+        # продолжаем работу только с консольным выводом.
+        pass
+
+# Собранные во время работы ошибки/предупреждения — используется GUI (вкладка "Ошибки").
+# Доступ из нескольких потоков (сканирование идёт в ThreadPoolExecutor), поэтому под замком.
+ERROR_LOG: List[Dict[str, str]] = []
+_error_log_lock = threading.Lock()
+
+
+def log_warning(context: str, message: str) -> None:
+    """Логирует предупреждение: пишет в лог-файл/консоль и сохраняет для GUI."""
+    import datetime
+    logger.warning(f"⚠️  {context}: {message}")
+    with _error_log_lock:
+        ERROR_LOG.append({
+            "time": datetime.datetime.now().strftime("%H:%M:%S"),
+            "context": context,
+            "message": message,
+        })
+
+
+def get_error_log() -> List[Dict[str, str]]:
+    """Возвращает копию накопленных ошибок/предупреждений."""
+    with _error_log_lock:
+        return list(ERROR_LOG)
+
+
+def clear_error_log() -> None:
+    """Очищает накопленные ошибки/предупреждения (например, перед новым сканированием)."""
+    with _error_log_lock:
+        ERROR_LOG.clear()
+
+
 # Глобальные переменные
 TRANSLATED_MODS_PATH: Optional[Path] = None
 CONFIG: Dict[str, Any] = {}
+
+# ──────────────────────────────────────────────────────────────────────────
+# Целевой язык перевода (по умолчанию русский). Меняется через config.json
+# ("target_language") или через выпадающий список в GUI.
+# ──────────────────────────────────────────────────────────────────────────
+
+TARGET_LANG_CODE: str = "ru_ru"
+
+# Часто используемые языки для выпадающего списка в GUI. Можно указать и любой
+# другой код вручную — программа не ограничена этим списком.
+AVAILABLE_LANGUAGES: List[Tuple[str, str]] = [
+    ("ru_ru", "Русский (ru_ru)"),
+    ("uk_ua", "Українська (uk_ua)"),
+    ("de_de", "Deutsch (de_de)"),
+    ("fr_fr", "Français (fr_fr)"),
+    ("es_es", "Español (es_es)"),
+    ("pl_pl", "Polski (pl_pl)"),
+    ("pt_br", "Português (pt_br)"),
+    ("it_it", "Italiano (it_it)"),
+    ("tr_tr", "Türkçe (tr_tr)"),
+    ("zh_cn", "中文 (zh_cn)"),
+    ("ja_jp", "日本語 (ja_jp)"),
+    ("ko_kr", "한국어 (ko_kr)"),
+]
+
+
+CATEGORY_LABELS: Dict[str, str] = {
+    "full": "[100%] Полный",
+    "partial": "[Частично] Неполный",
+    "missing": "[Нет] Отсутствует",
+    "translated": "[Переведён]",
+    "outdated": "[Устарел]",
+}
+
+
+def normalize_lang_code(code: str) -> str:
+    """Приводит код языка к виду xx_yy (например, 'RU' -> 'ru_ru', 'de-DE' -> 'de_de')."""
+    code = (code or "ru_ru").strip().lower().replace("-", "_")
+    if not code:
+        return "ru_ru"
+    if "_" not in code:
+        code = f"{code}_{code}"
+    return code
+
+
+def set_target_language(code: str) -> None:
+    """Устанавливает целевой язык перевода для всей проверки/извлечения."""
+    global TARGET_LANG_CODE
+    TARGET_LANG_CODE = normalize_lang_code(code)
+
+
+def get_target_language() -> str:
+    """Возвращает текущий выбранный код целевого языка (например, 'ru_ru')."""
+    return TARGET_LANG_CODE
+
+
+def target_json_filename() -> str:
+    """Имя JSON-файла локализации для текущего целевого языка (Minecraft 1.13+)."""
+    return f"{TARGET_LANG_CODE}.json"
+
+
+def target_lang_filename() -> str:
+    """Имя .lang-файла локализации для текущего целевого языка (Minecraft 1.12.2 и ниже)."""
+    parts = TARGET_LANG_CODE.split("_")
+    if len(parts) == 2:
+        return f"{parts[0]}_{parts[1].upper()}.lang"
+    return f"{TARGET_LANG_CODE}.lang"
+
+
+def target_lang_display() -> str:
+    """Короткое отображаемое имя языка для UI, например 'RU', 'DE'."""
+    return TARGET_LANG_CODE.split("_")[0].upper()
+
+
+def _is_target_lang_file(filename: str) -> bool:
+    """
+    Проверяет, что ИМЯ файла (без пути) — это .lang файл текущего целевого языка.
+    Сравнение по префиксу языка (например 'ru' у 'ru_ru'/'ru_RU'), но обязательно
+    по всему имени файла целиком — а не подстрокой где угодно в пути, чтобы не
+    словить случайное совпадение вроде "structure.lang".
+    """
+    match = re.match(r'^([a-z]{2,3})_([a-z]{2,3})\.lang$', filename.lower())
+    if not match:
+        return False
+    target_prefix = TARGET_LANG_CODE.split('_')[0]
+    return match.group(1) == target_prefix
 
 
 def get_system_theme() -> str:
@@ -134,10 +280,13 @@ def load_config(config_file: str = "config.json") -> None:
     CONFIG = {
         "translated_mods_path": "TranslatedMods",
         "supported_languages": ["ru_ru"],
+        "target_language": "ru_ru",
         "max_workers": 4,
         "show_statistics": True,
         "default_export_file": "localization_results.json",
         "last_directory": "",
+        "last_extract_source": "",
+        "last_extract_output": "",
         "row_colors": default_row_colors
     }
 
@@ -148,6 +297,9 @@ def load_config(config_file: str = "config.json") -> None:
                 loaded = json.load(f)
                 # Загруженные значения дополняют/перекрывают дефолтные, но не стирают их полностью
                 CONFIG.update(loaded)
+
+                # Применяем целевой язык перевода из конфига
+                set_target_language(CONFIG.get("target_language", "ru_ru"))
 
                 # Устанавливаем TRANSLATED_MODS_PATH из конфига, если указан
                 if CONFIG.get("translated_mods_path"):
@@ -189,7 +341,7 @@ def load_config(config_file: str = "config.json") -> None:
                     }
                 # конец нормализации row_colors
     except Exception as e:
-        print(f"⚠️  Ошибка загрузки конфига: {e}")
+        log_warning("Загрузка конфига", str(e))
 
 
 def save_config(config_file: str = "config.json") -> None:
@@ -199,7 +351,7 @@ def save_config(config_file: str = "config.json") -> None:
         with open(config_path, 'w', encoding='utf-8') as f:
             json.dump(CONFIG, f, ensure_ascii=False, indent=2)
     except Exception as e:
-        print(f"⚠️  Ошибка сохранения конфига: {e}")
+        log_warning("Сохранение конфига", str(e))
 
 
 def set_translated_mods_path(path: Optional[Path]):
@@ -408,10 +560,10 @@ def extract_json_from_file(file_path: Path) -> Optional[Dict[str, str]]:
             data = json.loads(content)
             return data
     except (json.JSONDecodeError, UnicodeDecodeError, KeyError) as e:
-        print(f"⚠️  Ошибка чтения {file_path}: {e}")
+        log_warning("Чтение JSON", f"{file_path}: {e}")
         return None
     except Exception as e:
-        print(f"⚠️  Неожиданная ошибка при чтении {file_path}: {e}")
+        log_warning("Чтение JSON", f"{file_path} (неожиданная ошибка): {e}")
         return None
 
 
@@ -454,14 +606,14 @@ def parse_lang_file(file_path: Path) -> Optional[Dict[str, str]]:
                         result[key] = value
                 elif line:
                     # Строка без '=' - возможно malformed, пропускаем с предупреждением
-                    print(f"⚠️  Пропущена строка {line_num} в {file_path}: нет разделителя '='")
+                    log_warning("Чтение .lang", f"строка {line_num} в {file_path} пропущена: нет разделителя '='")
         
         return result
     except (UnicodeDecodeError, IOError) as e:
-        print(f"⚠️  Ошибка чтения {file_path}: {e}")
+        log_warning("Чтение .lang", f"{file_path}: {e}")
         return None
     except Exception as e:
-        print(f"⚠️  Неожиданная ошибка при чтении {file_path}: {e}")
+        log_warning("Чтение .lang", f"{file_path} (неожиданная ошибка): {e}")
         return None
 
 
@@ -511,23 +663,24 @@ def parse_lang_from_jar(jar_path: Path, lang_path: str) -> Optional[Dict[str, st
                 
                 return result
     except (zipfile.BadZipFile, UnicodeDecodeError, KeyError) as e:
-        print(f"⚠️  Ошибка чтения {lang_path} из {jar_path}: {e}")
+        log_warning("Чтение .lang из архива", f"{lang_path} из {jar_path}: {e}")
         return None
     except Exception as e:
-        print(f"⚠️  Неожиданная ошибка при чтении {jar_path}: {e}")
+        log_warning("Чтение .lang из архива", f"{jar_path} (неожиданная ошибка): {e}")
         return None
 
 
 def find_ru_ru_in_translated_mods(mod_name: str) -> Optional[Path]:
     """
-    Ищет файл ru_ru.json или ru_RU.lang для мода в папке TranslatedMods.
+    Ищет файл локализации выбранного целевого языка (по умолчанию ru_ru.json/ru_RU.lang,
+    но зависит от TARGET_LANG_CODE / CONFIG["target_language"]) для мода в папке TranslatedMods.
     
     Структура TranslatedMods:
     TranslatedMods/
     ├── <название_мода>/
     │   └── lang/
-    │       ├── ru_ru.json (для новых версий Minecraft 1.13+)
-    │       └── ru_RU.lang (для старых версий Minecraft 1.12.2 и ниже)
+    │       ├── <lang>.json (для новых версий Minecraft 1.13+)
+    │       └── <Lang>.lang (для старых версий Minecraft 1.12.2 и ниже)
     
     Args:
         mod_name: Название мода (извлеченное из assets внутри .jar файла)
@@ -542,12 +695,12 @@ def find_ru_ru_in_translated_mods(mod_name: str) -> Optional[Path]:
     # как assets-имя мода. Нечёткий поиск давал ложные срабатывания.
     mod_dir = TRANSLATED_MODS_PATH / mod_name
     if mod_dir.exists() and mod_dir.is_dir():
-        ru_ru_path = mod_dir / "lang" / "ru_ru.json"
-        if ru_ru_path.exists():
-            return ru_ru_path
-        ru_lang_path = mod_dir / "lang" / "ru_RU.lang"
-        if ru_lang_path.exists():
-            return ru_lang_path
+        json_path = mod_dir / "lang" / target_json_filename()
+        if json_path.exists():
+            return json_path
+        lang_path = mod_dir / "lang" / target_lang_filename()
+        if lang_path.exists():
+            return lang_path
 
     return None
 
@@ -587,12 +740,39 @@ def extract_mod_name_from_assets(jar_path: Path) -> Optional[str]:
     return None
 
 
+def _has_letters(value: str) -> bool:
+    """True, если строка содержит хотя бы одну букву (любого алфавита)."""
+    return any(ch.isalpha() for ch in value)
+
+
+def _find_identical_value_keys(en_data: Dict[str, str], ru_data: Dict[str, str],
+                                shared_keys: set) -> List[str]:
+    """
+    Ищет ключи, у которых значение перевода совпадает со значением на английском —
+    частый признак того, что строку забыли перевести (или скопировали as-is).
+
+    Чтобы не заваливать результат ложными срабатываниями, пропускаем значения без
+    единой буквы (числа, "%s", цветовые коды §c и т.п. — там совпадение нормально).
+    """
+    identical = []
+    for key in shared_keys:
+        en_value = str(en_data.get(key, "")).strip()
+        ru_value = str(ru_data.get(key, "")).strip()
+        if not en_value or en_value != ru_value:
+            continue
+        if not _has_letters(en_value):
+            continue
+        identical.append(key)
+    return sorted(identical)
+
+
 def _compare_keys(en_data: Dict[str, str], ru_data: Dict[str, str]) -> Dict[str, Any]:
     """
     Сравнивает ключи английской и русской локализаций.
 
     Returns:
-        Словарь с полями: ru_keys, missing_keys, extra_keys, percentage, status
+        Словарь с полями: ru_keys, missing_keys, extra_keys, percentage, status,
+        identical_keys, identical_count
     """
     en_keys_set = set(en_data.keys())
     ru_keys_set = set(ru_data.keys())
@@ -600,12 +780,15 @@ def _compare_keys(en_data: Dict[str, str], ru_data: Dict[str, str]) -> Dict[str,
 
     missing_keys = sorted(en_keys_set - ru_keys_set)
     extra_keys = sorted(ru_keys_set - en_keys_set)
+    shared_keys = en_keys_set & ru_keys_set
+
+    identical_keys = _find_identical_value_keys(en_data, ru_data, shared_keys)
 
     if en_count == 0:
         percentage = 0.0
         status = "missing"
     else:
-        percentage = round((len(en_keys_set & ru_keys_set) / en_count) * 100, 2)
+        percentage = round((len(shared_keys) / en_count) * 100, 2)
         status = "full" if percentage == 100.0 else "partial"
 
     return {
@@ -614,6 +797,8 @@ def _compare_keys(en_data: Dict[str, str], ru_data: Dict[str, str]) -> Dict[str,
         "extra_keys": extra_keys,
         "percentage": percentage,
         "status": status,
+        "identical_keys": identical_keys,
+        "identical_count": len(identical_keys),
     }
 
 
@@ -640,6 +825,8 @@ def check_translated_mods_localization(jar_path: Path, mod_name: str, en_data: D
         "percentage": 0.0,
         "missing_keys": [],
         "extra_keys": [],
+        "identical_keys": [],
+        "identical_count": 0,
         "error": None
     }
     
@@ -709,10 +896,10 @@ def extract_json_from_jar(jar_path: Path, lang_path: str) -> Optional[Dict[str, 
                 data = json.loads(content)
                 return data
     except (zipfile.BadZipFile, json.JSONDecodeError, UnicodeDecodeError, KeyError) as e:
-        print(f"⚠️  Ошибка чтения {lang_path} из {jar_path}: {e}")
+        log_warning("Чтение JSON из архива", f"{lang_path} из {jar_path}: {e}")
         return None
     except Exception as e:
-        print(f"⚠️  Неожиданная ошибка при чтении {jar_path}: {e}")
+        log_warning("Чтение JSON из архива", f"{jar_path} (неожиданная ошибка): {e}")
         return None
 
 
@@ -777,10 +964,10 @@ def check_patchouli_books(jar_path: Path) -> List[Dict[str, Any]]:
             books[key] = {'mod_name': mod_name, 'book_name': book_name,
                           'en_files': set(), 'ru_files': set()}
 
-        # Сравниваем без учёта регистра: en_us == en_US, ru_ru == ru_RU
+        # Сравниваем без учёта регистра: en_us == en_US, а целевой язык — по TARGET_LANG_CODE
         if lang in ('en_us',):
             books[key]['en_files'].add(rest)
-        elif lang in ('ru_ru',):
+        elif lang == TARGET_LANG_CODE:
             books[key]['ru_files'].add(rest)
 
     for key, book in books.items():
@@ -803,11 +990,11 @@ def check_patchouli_books(jar_path: Path) -> List[Dict[str, Any]]:
         else:
             status = 'missing'
 
-        # Проверяем TranslatedMods/<mod>/patchouli_books/<book>/ru_ru/
+        # Проверяем TranslatedMods/<mod>/patchouli_books/<book>/<target_lang>/
         # и дополняем ru_files файлами оттуда
         final_ru_count = len(ru_files)
         if TRANSLATED_MODS_PATH is not None and TRANSLATED_MODS_PATH.exists():
-            tm_ru_dir = TRANSLATED_MODS_PATH / book['mod_name'] / "patchouli_books" / book['book_name'] / "ru_ru"
+            tm_ru_dir = TRANSLATED_MODS_PATH / book['mod_name'] / "patchouli_books" / book['book_name'] / TARGET_LANG_CODE
             if tm_ru_dir.exists():
                 tm_ru_files = set()
                 for f in tm_ru_dir.rglob("*"):
@@ -888,6 +1075,9 @@ def find_mod_lang_files_in_archive(jar_path: Path) -> Dict[str, Dict[str, Any]]:
                 if not mod_name:
                     continue
 
+                # Поля называются 'ru_*' исторически, но хранят кандидатов для ТЕКУЩЕГО
+                # целевого языка перевода (TARGET_LANG_CODE / CONFIG["target_language"]),
+                # а не обязательно русского.
                 info = mods.setdefault(mod_name, {
                     'en_us_candidates': [],
                     'ru_ru_candidates': [],
@@ -901,15 +1091,16 @@ def find_mod_lang_files_in_archive(jar_path: Path) -> Dict[str, Dict[str, Any]]:
 
                 if normalized.endswith('/en_us.json'):
                     info['en_us_candidates'].append(name)
-                elif normalized.endswith('/ru_ru.json'):
+                elif normalized.endswith('/' + target_json_filename()):
                     info['ru_ru_candidates'].append(name)
                 elif normalized.endswith('/en_us.lang'):
                     info['en_lang_candidates'].append(name)
                     info['has_lang_files'] = True
                 elif normalized.endswith('.lang'):
-                    # Добавляем только файлы с 'ru' в названии (ru_ru.lang, ru_RU.lang и т.д.)
-                    # Пропускаем es_ES.lang, fr_FR.lang и другие неанглийские файлы
-                    if 'ru' in normalized:
+                    # Сравниваем по имени файла (без пути) и точному соответствию
+                    # xx_yy.lang выбранному целевому языку — например ru_ru.lang/ru_RU.lang для "ru".
+                    filename = normalized.rsplit('/', 1)[-1]
+                    if _is_target_lang_file(filename):
                         info['ru_lang_candidates'].append(name)
                         info['has_lang_files'] = True
     except zipfile.BadZipFile:
@@ -993,10 +1184,10 @@ def build_translation_stub_tasks(mod_files: List[Path]) -> List[Dict[str, Any]]:
 
 
 def count_existing_ru_translations(tasks: List[Dict[str, Any]], output_dir: Path) -> int:
-    """Считает, для скольких заданий уже есть ru файл перевода в выходной папке."""
+    """Считает, для скольких заданий уже есть файл перевода целевого языка в выходной папке."""
     count = 0
     for task in tasks:
-        ru_filename = "ru_ru.json" if task['is_json'] else "ru_RU.lang"
+        ru_filename = target_json_filename() if task['is_json'] else target_lang_filename()
         if (output_dir / task['mod_name'] / "lang" / ru_filename).exists():
             count += 1
     return count
@@ -1027,11 +1218,11 @@ def extract_translation_stub(task: Dict[str, Any], output_dir: Path, overwrite_e
         if is_json:
             en_data = _merge_json_candidates(jar_path, info['en_us_candidates'])
             ru_data = _merge_json_candidates(jar_path, info['ru_ru_candidates']) if info['ru_ru_candidates'] else None
-            en_filename, ru_filename = "en_us.json", "ru_ru.json"
+            en_filename, ru_filename = "en_us.json", target_json_filename()
         else:
             en_data = _merge_lang_candidates(jar_path, info['en_lang_candidates'])
             ru_data = _merge_lang_candidates(jar_path, info['ru_lang_candidates']) if info['ru_lang_candidates'] else None
-            en_filename, ru_filename = "en_US.lang", "ru_RU.lang"
+            en_filename, ru_filename = "en_US.lang", target_lang_filename()
 
         if not en_data:
             return {'mod_name': mod_name, 'status': 'error', 'error': 'Не удалось прочитать en_us из мода/архива'}
@@ -1101,7 +1292,7 @@ def extract_patchouli_stub_for_jar(jar_path: Path, output_dir: Path, overwrite_e
                 entry = books.setdefault(key, {'mod_name': mod_name, 'book_name': book_name, 'en': {}, 'ru': {}})
                 if lang == 'en_us':
                     entry['en'][rest] = raw_name
-                elif lang == 'ru_ru':
+                elif lang == TARGET_LANG_CODE:
                     entry['ru'][rest] = raw_name
 
             for book in books.values():
@@ -1124,7 +1315,7 @@ def extract_patchouli_stub_for_jar(jar_path: Path, output_dir: Path, overwrite_e
                         f.write(raw_bytes)
                     stats['copied_en'] += 1
 
-                    ru_target = book_out_dir / "ru_ru" / Path(*rest.split('/'))
+                    ru_target = book_out_dir / TARGET_LANG_CODE / Path(*rest.split('/'))
                     if ru_target.exists() and not overwrite_existing:
                         stats['skipped_ru'] += 1
                         continue
@@ -1156,12 +1347,20 @@ def extract_all_translation_stubs(
     output_dir: Path,
     overwrite_existing: bool,
     progress_callback: Optional[Callable[[int, int], None]] = None,
-    phase_callback: Optional[Callable[[str], None]] = None
+    phase_callback: Optional[Callable[[str], None]] = None,
+    item_callback: Optional[Callable[[Dict[str, Any]], None]] = None
 ) -> Dict[str, Any]:
     """
-    Сканирует source_dir на .jar/.zip моды и для каждого извлекает en_us/ru_ru
-    (включая .lang файлы старых модов и Patchouli-гайдбуки) в output_dir,
-    готовя структуру для последующего перевода.
+    Сканирует source_dir на .jar/.zip моды и для каждого извлекает en_us + перевод
+    для текущего целевого языка (включая .lang файлы старых модов и Patchouli-гайдбуки)
+    в output_dir, готовя структуру для последующего перевода.
+
+    Args:
+        progress_callback: (current, total) — числовой прогресс внутри текущей фазы.
+        phase_callback: (text) — смена текущей фазы работы ("Поиск модов...", и т.д.).
+        item_callback: (result_dict) — вызывается по каждому обработанному моду/архиву,
+            удобно для живого лога в GUI. result_dict содержит как минимум 'mod_name'
+            и 'status' (или 'phase': 'patchouli' для итогов по гайдбукам одного архива).
 
     Returns:
         Словарь со статистикой: created_from_mod, created_stub, skipped, error, errors,
@@ -1210,17 +1409,34 @@ def extract_all_translation_stubs(
 
                 if progress_callback:
                     progress_callback(i + 1, total)
+                if item_callback:
+                    item_callback(result)
 
     # Извлекаем Patchouli-гайдбуки для всех найденных jar/zip файлов
     if mod_files:
         if phase_callback:
             phase_callback("Извлечение гайдбуков Patchouli...")
 
-        for jar_path in mod_files:
+        pb_total = len(mod_files)
+        for i, jar_path in enumerate(mod_files):
             result = extract_patchouli_stub_for_jar(jar_path, output_dir, overwrite_existing)
             for key in ('copied_en', 'copied_ru_from_mod', 'created_ru_stub', 'skipped_ru', 'error'):
                 stats['patchouli'][key] += result[key]
             stats['patchouli']['errors'].extend(result['errors'])
+
+            # Раньше прогресс на этой фазе не обновлялся — на больших наборах модов
+            # это выглядело как "зависание" на несколько секунд/минут без обратной связи.
+            if progress_callback:
+                progress_callback(i + 1, pb_total)
+            if item_callback and (result['copied_en'] or result['error']):
+                item_callback({
+                    'mod_name': jar_path.name,
+                    'phase': 'patchouli',
+                    'status': 'error' if result['error'] else 'ok',
+                    'copied_en': result['copied_en'],
+                    'copied_ru_from_mod': result['copied_ru_from_mod'],
+                    'created_ru_stub': result['created_ru_stub'],
+                })
 
     return stats
 
@@ -1238,6 +1454,8 @@ def check_mod_localization(jar_path: Path, mod_name: str, mod_info: Dict[str, An
         'percentage': 0.0,
         'missing_keys': [],
         'extra_keys': [],
+        'identical_keys': [],
+        'identical_count': 0,
         'error': None,
         'patchouli': []
     }
@@ -1290,7 +1508,9 @@ def check_mod_localization(jar_path: Path, mod_name: str, mod_info: Dict[str, An
                 'ru_keys': translated_mods_result['ru_keys'],
                 'percentage': translated_mods_result['percentage'],
                 'missing_keys': translated_mods_result['missing_keys'],
-                'extra_keys': translated_mods_result['extra_keys']
+                'extra_keys': translated_mods_result['extra_keys'],
+                'identical_keys': translated_mods_result.get('identical_keys', []),
+                'identical_count': translated_mods_result.get('identical_count', 0)
             })
             return result
 
@@ -1313,7 +1533,7 @@ def check_mod_localization(jar_path: Path, mod_name: str, mod_info: Dict[str, An
         return result
 
     result['status'] = 'missing'
-    result['error'] = 'Нет ru_ru.json/ru_RU.lang'
+    result['error'] = f'Нет {target_json_filename()}/{target_lang_filename()}'
     return result
 
 
@@ -1355,6 +1575,8 @@ def check_jar_localization(jar_path: Path) -> List[Dict[str, Any]]:
                     "percentage": 0.0,
                     "missing_keys": [],
                     "extra_keys": [],
+                    "identical_keys": [],
+                    "identical_count": 0,
                     "error": "Только Patchouli гайдбук (нет стандартной локализации)",
                     "patchouli": books
                 })
@@ -1368,6 +1590,8 @@ def check_jar_localization(jar_path: Path) -> List[Dict[str, Any]]:
             "percentage": 0.0,
             "missing_keys": [],
             "extra_keys": [],
+            "identical_keys": [],
+            "identical_count": 0,
             "error": "Папка локализации (lang/language/lang_nei) не найдена в архиве (мод пропущен)"
         }]
 
@@ -1427,7 +1651,7 @@ def scan_jars_directory(base_path: Path, progress_callback=None) -> Dict[str, Li
                 jar_results = future.result()
             except Exception as e:
                 jar_path = future_to_jar[future]
-                print(f"⚠️  Ошибка обработки {jar_path.name}: {e}")
+                log_warning("Обработка мода", f"{jar_path.name}: {e}")
                 if progress_callback:
                     progress_callback(i + 1, total)
                 continue
@@ -1474,14 +1698,17 @@ class LocalizationCheckerGUI:
     def __init__(self, root):
         self.root = root
         self.root.title("Minecraft Localization Checker")
-        self.root.geometry("900x700")
-        self.root.minsize(800, 600)
+        # Окно 900x700 обрезало тулбар (например, выпадающий список языка) при таком
+        # количестве кнопок — увеличили стартовый размер и минимальный тоже.
+        self.root.geometry("1200x750")
+        self.root.minsize(1000, 650)
         
         self.current_path = None
         self.results = None
         self.status_message = ""
         self.status_color = "gray"
         self.dark_mode = False
+        self._extract_dialog_win = None
         
         # Отслеживание сортировки для каждой таблицы
         self.sort_state = {
@@ -1495,6 +1722,8 @@ class LocalizationCheckerGUI:
         self.setup_ui()
         if get_system_theme() == "dark":
             self.toggle_theme()
+
+        self.refresh_errors_tab()
 
         # F5 — горячая перезагрузка (обновление)
         self.root.bind_all("<F5>", lambda e: self.refresh_check())
@@ -1534,10 +1763,31 @@ class LocalizationCheckerGUI:
 
         self.extract_stub_btn = ttk.Button(self.top_frame, text="📦 Извлечь для перевода", command=self.open_extract_stub_dialog, style="Custom.TButton")
         self.extract_stub_btn.pack(side=tk.LEFT, padx=5)
-        
+
         # Кнопка переключения темы (кнопку "Закрыть" убрали)
         self.theme_btn = ttk.Button(self.top_frame, text="🌙 Тёмная тема", command=self.toggle_theme, style="Custom.TButton")
         self.theme_btn.pack(side=tk.RIGHT, padx=5)
+
+        # ── Выбор целевого языка перевода ────────────────────────────────
+        self.lang_label = tk.Label(self.top_frame, text="Язык:")
+        self.lang_label.pack(side=tk.RIGHT, padx=(5, 2))
+
+        self._lang_code_by_display = {label: code for code, label in AVAILABLE_LANGUAGES}
+        self._lang_display_by_code = {code: label for code, label in AVAILABLE_LANGUAGES}
+
+        current_code = get_target_language()
+        current_display = self._lang_display_by_code.get(current_code, current_code)
+
+        self.lang_var = tk.StringVar(value=current_display)
+        self.lang_combo = ttk.Combobox(
+            self.top_frame, textvariable=self.lang_var,
+            values=[label for _, label in AVAILABLE_LANGUAGES],
+            state="normal", width=20, style="Custom.TCombobox"
+        )
+        self.lang_combo.pack(side=tk.RIGHT, padx=(0, 5))
+        self.lang_combo.bind("<<ComboboxSelected>>", self.on_language_selected)
+        self.lang_combo.bind("<Return>", self.on_language_selected)
+        self.lang_combo.bind("<FocusOut>", self.on_language_selected)
         
         # Стиль для виджетов ttk — будем менять для тёмной темы
         self.style = ttk.Style(self.root)
@@ -1566,6 +1816,14 @@ class LocalizationCheckerGUI:
         )
         self.style.configure("Custom.TEntry", fieldbackground="white", foreground="black", background="white")
         self.style.configure("Custom.TCombobox", fieldbackground="white", foreground="black", background="#e0e0e0")
+
+        # Выпадающий список Combobox (popdown) — это отдельный Tk-виджет, ttk.Style на него
+        # не влияет, поэтому красим через option_add. Обновляется при смене темы в toggle_theme().
+        self.root.option_add('*TCombobox*Listbox.background', 'white')
+        self.root.option_add('*TCombobox*Listbox.foreground', 'black')
+        self.root.option_add('*TCombobox*Listbox.selectBackground', '#3a7bd5')
+        self.root.option_add('*TCombobox*Listbox.selectForeground', 'white')
+        self.root.option_add('*TCombobox*Listbox.font', 'TkDefaultFont')
 
         # Панель прогресса - используем tk.Frame для поддержки смены цветов фона
         self.progress_frame = tk.Frame(self.root)
@@ -1600,12 +1858,12 @@ class LocalizationCheckerGUI:
         # Вкладка "Полный перевод"
         self.full_frame = tk.Frame(self.notebook)
         self.notebook.add(self.full_frame, text="[100%] Полный")
-        self.full_tree = self.create_treeview(self.full_frame, ["Мод", "Ключи RU", "Ключи EN", "%"])
+        self.full_tree = self.create_treeview(self.full_frame, ["Мод", "Ключи RU", "Ключи EN", "%", "Совпд. с EN"])
         
         # Вкладка "Неполный перевод"
         self.partial_frame = tk.Frame(self.notebook)
         self.notebook.add(self.partial_frame, text="[Частично] Неполный")
-        self.partial_tree = self.create_treeview(self.partial_frame, ["Мод", "Ключи RU", "Ключи EN", "%", "Не хватает"])
+        self.partial_tree = self.create_treeview(self.partial_frame, ["Мод", "Ключи RU", "Ключи EN", "%", "Не хватает", "Совпд. с EN"])
         
         # Вкладка "Отсутствует"
         self.missing_frame = tk.Frame(self.notebook)
@@ -1615,12 +1873,24 @@ class LocalizationCheckerGUI:
         # Вкладка "Переведён" (только из TranslatedMods, 100%)
         self.translated_frame = tk.Frame(self.notebook)
         self.notebook.add(self.translated_frame, text="[Переведён]")
-        self.translated_tree = self.create_treeview(self.translated_frame, ["Мод", "Ключи RU", "Ключи EN", "%"])
+        self.translated_tree = self.create_treeview(self.translated_frame, ["Мод", "Ключи RU", "Ключи EN", "%", "Совпд. с EN"])
 
         # Вкладка "Устаревший перевод" (из TranslatedMods, но не 100%)
         self.outdated_frame = tk.Frame(self.notebook)
         self.notebook.add(self.outdated_frame, text="[Устарел]")
-        self.outdated_tree = self.create_treeview(self.outdated_frame, ["Мод", "Ключи RU", "Ключи EN", "%", "Не хватает"])
+        self.outdated_tree = self.create_treeview(self.outdated_frame, ["Мод", "Ключи RU", "Ключи EN", "%", "Не хватает", "Совпд. с EN"])
+
+        # Вкладка "Ошибки" — сводка предупреждений/ошибок парсинга, накопленных за сессию
+        self.errors_frame = tk.Frame(self.notebook)
+        self.notebook.add(self.errors_frame, text="⚠️ Ошибки (0)")
+        self.errors_tree = self.create_errors_treeview(self.errors_frame)
+
+        # Кнопка "Скопировать моды" — размещена НЕ как обычная вкладка/кнопка тулбара,
+        # а поверх полосы вкладок Notebook (через place), в её правом углу — там же,
+        # где сама пользователь её и просил разместить, "в одной плоскости с категориями".
+        self.copy_mods_btn = ttk.Button(self.notebook, text="📋 Скопировать моды",
+                                         command=self.copy_category_mods, style="Custom.TButton")
+        self.copy_mods_btn.place(relx=1.0, x=-6, y=3, anchor="ne")
 
         # Глобальная привязка Ctrl+C, чтобы копирование работало независимо от фокуса и раскладки
         self.root.bind_all("<Control-KeyPress>", self.on_copy_shortcut)
@@ -1636,6 +1906,97 @@ class LocalizationCheckerGUI:
         self.status_label = tk.Label(self.status_frame, text="Выберите папку с .jar или .zip файлами модов", fg="gray")
         self.status_label.pack(side=tk.LEFT)
     
+    def create_errors_treeview(self, parent):
+        """Создаёт вкладку 'Ошибки': панель с кнопками + таблицу накопленных предупреждений/ошибок."""
+        toolbar = tk.Frame(parent)
+        toolbar.pack(fill=tk.X, padx=4, pady=(4, 0))
+        self.errors_toolbar = toolbar
+
+        copy_all_btn = ttk.Button(toolbar, text="📋 Скопировать всё",
+                                   command=self.copy_all_errors, style="Custom.TButton")
+        copy_all_btn.pack(side=tk.LEFT, padx=(0, 5))
+
+        clear_btn = ttk.Button(toolbar, text="🗑️ Очистить",
+                                command=self.clear_errors_tab, style="Custom.TButton")
+        clear_btn.pack(side=tk.LEFT)
+
+        hint = tk.Label(toolbar, text=f"Полная история сохраняется в {LOG_FILE_NAME}", fg="gray")
+        hint.pack(side=tk.RIGHT)
+        self.errors_hint_label = hint
+
+        columns = ["Время", "Контекст", "Сообщение"]
+        tree = ttk.Treeview(parent, columns=columns, show="headings", selectmode="extended", style="Custom.Treeview")
+        for col in columns:
+            tree.heading(col, text=col)
+            tree.column(col, width=90 if col == "Время" else (160 if col == "Контекст" else 480))
+
+        scrollbar = ttk.Scrollbar(parent, orient=tk.VERTICAL, command=tree.yview)
+        tree.configure(yscrollcommand=scrollbar.set)
+
+        tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(4, 0), pady=4)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y, pady=4)
+
+        self.setup_tree_tags(tree)
+        tree.bind("<Control-KeyPress>", lambda e: self.on_errors_copy_shortcut(e, tree))
+
+        return tree
+
+    def refresh_errors_tab(self):
+        """Перечитывает накопленные ошибки/предупреждения и обновляет вкладку 'Ошибки'."""
+        if not hasattr(self, "errors_tree"):
+            return
+        for item in self.errors_tree.get_children():
+            self.errors_tree.delete(item)
+
+        entries = get_error_log()
+        for entry in entries:
+            self.errors_tree.insert("", tk.END, values=(entry["time"], entry["context"], entry["message"]))
+
+        tab_index = self.notebook.index(self.errors_frame)
+        self.notebook.tab(tab_index, text=f"⚠️ Ошибки ({len(entries)})")
+
+    def copy_all_errors(self):
+        """Копирует все строки вкладки 'Ошибки' в буфер обмена."""
+        entries = get_error_log()
+        if not entries:
+            self.show_temporary_status("Ошибок нет — нечего копировать")
+            return
+        lines = [f"[{e['time']}] {e['context']}: {e['message']}" for e in entries]
+        self.root.clipboard_clear()
+        self.root.clipboard_append("\n".join(lines))
+        self.show_temporary_status(f"Скопировано {len(lines)} записей")
+
+    def clear_errors_tab(self):
+        """Очищает накопленный список ошибок/предупреждений (историю в лог-файле не трогает)."""
+        clear_error_log()
+        self.refresh_errors_tab()
+        self.show_temporary_status("Список ошибок очищен")
+
+    def on_errors_copy_shortcut(self, event, tree):
+        """Ctrl+C/Ctrl+A на вкладке 'Ошибки', независимо от раскладки клавиатуры."""
+        if not (event.state & 0x4):
+            return None
+
+        if self.is_select_all_shortcut(event):
+            for item in tree.get_children():
+                tree.selection_add(item)
+            return "break"
+
+        if self.is_copy_shortcut(event):
+            selected = tree.selection()
+            if selected:
+                lines = []
+                for item_id in selected:
+                    values = tree.item(item_id).get("values", [])
+                    if values:
+                        lines.append(f"[{values[0]}] {values[1]}: {values[2]}")
+                if lines:
+                    self.root.clipboard_clear()
+                    self.root.clipboard_append("\n".join(lines))
+                    self.show_temporary_status(f"Скопировано {len(lines)} записей")
+            return "break"
+        return None
+
     def create_treeview(self, parent, columns):
         """Создает Treeview для отображения результатов."""
         tree = ttk.Treeview(parent, columns=columns, show="headings", selectmode="browse", style="Custom.Treeview")
@@ -1749,6 +2110,10 @@ class LocalizationCheckerGUI:
             except Exception:
                 pass
             try:
+                self.lang_label.config(bg=dark_bg, fg=dark_fg)
+            except Exception:
+                pass
+            try:
                 self.main_frame.config(bg=dark_bg)
             except Exception:
                 pass
@@ -1758,6 +2123,9 @@ class LocalizationCheckerGUI:
                 self.missing_frame.config(bg=dark_bg)
                 self.translated_frame.config(bg=dark_bg)
                 self.outdated_frame.config(bg=dark_bg)
+                self.errors_frame.config(bg=dark_bg)
+                self.errors_toolbar.config(bg=dark_bg)
+                self.errors_hint_label.config(bg=dark_bg, fg="#a8a8a8")
             except Exception:
                 pass
 
@@ -1791,6 +2159,12 @@ class LocalizationCheckerGUI:
                 self.style.configure("Custom.TEntry", fieldbackground="#1e1e1e", foreground=dark_fg, background="#1e1e1e")
                 self.style.configure("Custom.TCombobox", fieldbackground="#1e1e1e", foreground=dark_fg, background="#2f2f2f")
                 self.style.configure("Custom.Horizontal.TProgressbar", troughcolor="#2b2b2b", background="#28a028", bordercolor="#2b2b2b", lightcolor="#4cbf4c", darkcolor="#1c7c1c")
+
+                # Выпадающий список (popdown) Combobox — отдельный Tk-виджет, красим отдельно
+                self.root.option_add('*TCombobox*Listbox.background', '#1e1e1e')
+                self.root.option_add('*TCombobox*Listbox.foreground', dark_fg)
+                self.root.option_add('*TCombobox*Listbox.selectBackground', '#3a7bd5')
+                self.root.option_add('*TCombobox*Listbox.selectForeground', 'white')
             except Exception:
                 pass
             
@@ -1819,6 +2193,10 @@ class LocalizationCheckerGUI:
             except Exception:
                 pass
             try:
+                self.lang_label.config(bg=default_bg, fg="black")
+            except Exception:
+                pass
+            try:
                 self.main_frame.config(bg=default_bg)
             except Exception:
                 pass
@@ -1828,6 +2206,9 @@ class LocalizationCheckerGUI:
                 self.missing_frame.config(bg=default_bg)
                 self.translated_frame.config(bg=default_bg)
                 self.outdated_frame.config(bg=default_bg)
+                self.errors_frame.config(bg=default_bg)
+                self.errors_toolbar.config(bg=default_bg)
+                self.errors_hint_label.config(bg=default_bg, fg="gray")
             except Exception:
                 pass
 
@@ -1861,6 +2242,12 @@ class LocalizationCheckerGUI:
                 self.style.configure("Custom.TEntry", fieldbackground="white", foreground="black", background="white")
                 self.style.configure("Custom.TCombobox", fieldbackground="#ffffff", foreground="#121212", background="#e0e0e0")
                 self.style.configure("Custom.Horizontal.TProgressbar", troughcolor="#e8e8e8", background="#28a028", bordercolor="#e8e8e8", lightcolor="#4cbf4c", darkcolor="#1c7c1c")
+
+                # Выпадающий список (popdown) Combobox — возвращаем светлые цвета
+                self.root.option_add('*TCombobox*Listbox.background', 'white')
+                self.root.option_add('*TCombobox*Listbox.foreground', 'black')
+                self.root.option_add('*TCombobox*Listbox.selectBackground', '#3a7bd5')
+                self.root.option_add('*TCombobox*Listbox.selectForeground', 'white')
             except Exception:
                 pass
         
@@ -1872,6 +2259,7 @@ class LocalizationCheckerGUI:
         self.setup_tree_tags(self.missing_tree)
         self.setup_tree_tags(self.translated_tree)
         self.setup_tree_tags(self.outdated_tree)
+        self.setup_tree_tags(self.errors_tree)
         if self.results:
             # Пересоздаём результаты чтобы применить новые теги
             self.apply_filter()
@@ -1958,6 +2346,109 @@ class LocalizationCheckerGUI:
         if active_tree and active_tree.selection():
             return active_tree
         return None
+
+    def get_active_category(self):
+        """Возвращает (tree, category) для активной вкладки результатов, либо (None, None)
+        если открыта, например, вкладка 'Ошибки'."""
+        tab_index = self.notebook.index(self.notebook.select())
+        tab_to_tree = {
+            0: (self.full_tree, "full"),
+            1: (self.partial_tree, "partial"),
+            2: (self.missing_tree, "missing"),
+            3: (self.translated_tree, "translated"),
+            4: (self.outdated_tree, "outdated"),
+        }
+        return tab_to_tree.get(tab_index, (None, None))
+
+    def copy_category_mods(self):
+        """Копирует .jar/.zip файлы модов из активной вкладки результатов в выбранную папку."""
+        if not self.current_path:
+            messagebox.showwarning("Скопировать моды", "Сначала выберите и проверьте папку с модами.")
+            return
+
+        tree, category = self.get_active_category()
+        if tree is None:
+            messagebox.showwarning(
+                "Скопировать моды",
+                "Переключитесь на одну из вкладок с результатами (например, «Полный» или «Неполный») — "
+                "во вкладке «Ошибки» копировать нечего."
+            )
+            return
+
+        # Берём то, что реально показано в таблице сейчас — то есть с учётом поиска/фильтра,
+        # раз пользователь именно это видит перед собой.
+        jar_filenames = set()
+        for item_id in tree.get_children():
+            values = tree.item(item_id).get("values", [])
+            if not values:
+                continue
+            mod_name = str(values[0])
+            # Убираем бейдж Patchouli (например "  📖✅"), добавленный только для отображения
+            mod_name = mod_name.split("  📖")[0] if "  📖" in mod_name else mod_name
+            # Формат имени — "archive.jar (assets_namespace)"; берём часть до скобки
+            jar_filename = mod_name.split(" (")[0].strip()
+            if jar_filename:
+                jar_filenames.add(jar_filename)
+
+        if not jar_filenames:
+            messagebox.showinfo(
+                "Скопировать моды",
+                f"Во вкладке «{CATEGORY_LABELS.get(category, category)}» сейчас нет ни одного мода для копирования."
+            )
+            return
+
+        dest_dir = filedialog.askdirectory(
+            title=f"Куда скопировать моды ({CATEGORY_LABELS.get(category, category)})"
+        )
+        if not dest_dir:
+            return
+        dest_path = Path(dest_dir)
+
+        try:
+            dest_path.mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            messagebox.showerror("Скопировать моды", f"Не удалось создать папку назначения:\n{e}")
+            return
+
+        copied = 0
+        not_found = []
+        errors = []
+
+        for jar_filename in sorted(jar_filenames):
+            src_path = self.current_path / jar_filename
+            if not src_path.exists():
+                # Резервный поиск: мод может лежать во вложенной подпапке
+                # (основное сканирование идёт рекурсивно через rglob).
+                matches = list(self.current_path.rglob(jar_filename))
+                src_path = matches[0] if matches else None
+
+            if src_path is None or not src_path.exists():
+                not_found.append(jar_filename)
+                continue
+
+            if src_path.resolve() == (dest_path / src_path.name).resolve():
+                # Источник и назначение совпадают — копировать некуда, просто пропускаем
+                copied += 1
+                continue
+
+            try:
+                shutil.copy2(src_path, dest_path / src_path.name)
+                copied += 1
+            except Exception as e:
+                errors.append(f"{jar_filename}: {e}")
+
+        summary = f"Скопировано модов: {copied} из {len(jar_filenames)}\nПапка: {dest_path}"
+        if not_found:
+            preview = ", ".join(not_found[:5]) + ("…" if len(not_found) > 5 else "")
+            summary += f"\n\nНе найдены на диске ({len(not_found)}): {preview}"
+        if errors:
+            summary += "\n\nОшибки копирования:\n" + "\n".join(errors[:5])
+
+        if not_found or errors:
+            messagebox.showwarning("Скопировать моды", summary)
+        else:
+            messagebox.showinfo("Скопировать моды", summary)
+        self.show_temporary_status(f"Скопировано модов: {copied}/{len(jar_filenames)}")
 
     def is_select_all_shortcut(self, event):
         """Проверяет, что нажат Ctrl+A на любой раскладке клавиатуры."""
@@ -2090,7 +2581,7 @@ class LocalizationCheckerGUI:
             # Если кликнули на новую колонку, выбираем подходящее направление сортировки
             self.sort_state[category]["column"] = column
             # Числовые колонки сортируются по убыванию (большие значения первыми)
-            numeric_columns = ["%", "Ключи RU", "Ключи EN", "Не хватает"]
+            numeric_columns = ["%", "Ключи RU", "Ключи EN", "Не хватает", "Совпд. с EN"]
             self.sort_state[category]["reverse"] = column in numeric_columns
         
         # Пересортируем и отобразим результаты
@@ -2121,6 +2612,10 @@ class LocalizationCheckerGUI:
         elif column_name == "Не хватает":
             # Сортировка по количеству недостающих ключей
             return sorted(mods_list, key=lambda x: len(x.get("missing_keys", [])), reverse=reverse)
+
+        elif column_name == "Совпд. с EN":
+            # Сортировка по количеству ключей, совпадающих с английским значением
+            return sorted(mods_list, key=lambda x: x.get("identical_count", 0), reverse=reverse)
         
         elif column_name == "Причина":
             # Сортировка по причине (для вкладки "Отсутствует")
@@ -2180,6 +2675,31 @@ class LocalizationCheckerGUI:
         if self.current_path:
             self.start_check()
 
+    def on_language_selected(self, event=None):
+        """Обрабатывает выбор целевого языка перевода (из списка или введённого вручную кода)."""
+        typed = self.lang_var.get().strip()
+        if not typed:
+            return
+
+        # Если это одно из готовых значений — берём код языка из него,
+        # иначе считаем, что пользователь ввёл код языка сам (например "cs_cz").
+        new_code = self._lang_code_by_display.get(typed, normalize_lang_code(typed))
+
+        if new_code == get_target_language():
+            return
+
+        set_target_language(new_code)
+        CONFIG["target_language"] = get_target_language()
+        save_config()
+
+        display = self._lang_display_by_code.get(get_target_language(), get_target_language())
+        self.lang_var.set(display)
+
+        self.set_status_message(
+            f"Целевой язык перевода: {get_target_language()}. Нажмите «Обновить» (F5), чтобы применить к текущей папке.",
+            color="blue"
+        )
+
     def open_translated_mods_folder(self):
         """Открывает папку TranslatedMods в проводнике. Не требует предварительного выбора папки с модами —
         если путь ещё не настроен, предлагает выбрать его вручную."""
@@ -2200,24 +2720,46 @@ class LocalizationCheckerGUI:
             subprocess.Popen(["xdg-open", str(TRANSLATED_MODS_PATH)])
 
     def open_extract_stub_dialog(self):
-        """Открывает окно для извлечения en_us/ru_ru (включая .lang и Patchouli-гайдбуки)
-        из модов в отдельную папку для перевода."""
+        """Открывает окно для извлечения en_us + перевода (включая .lang и Patchouli-гайдбуки)
+        из модов в отдельную папку для перевода.
+
+        Повторный вызов (например, второй клик по кнопке) не создаёт новое окно — если оно уже
+        открыто (в том числе свёрнуто), просто разворачивает и поднимает наверх старое."""
+        existing = getattr(self, "_extract_dialog_win", None)
+        if existing is not None:
+            try:
+                if existing.winfo_exists():
+                    existing.deiconify()
+                    existing.lift()
+                    existing.focus_force()
+                    return
+            except tk.TclError:
+                pass
+            self._extract_dialog_win = None
+
         bg      = "#1e1e1e" if self.dark_mode else "#f5f5f5"
         fg      = "#e0e0e0" if self.dark_mode else "#1a1a1a"
         hdr_bg  = "#2a2a2a" if self.dark_mode else "#c8d0de"
         entry_bg = "#252525" if self.dark_mode else "#ffffff"
+        box_bg  = "#252525" if self.dark_mode else "#ffffff"
 
         win = tk.Toplevel(self.root)
+        self._extract_dialog_win = win
         win.title("Извлечь для перевода")
-        win.geometry("640x300")
-        win.minsize(520, 260)
+        win.geometry("640x480")
+        win.minsize(520, 380)
         win.configure(bg=bg)
         win.resizable(True, True)
 
-        source_var = tk.StringVar(value=str(self.current_path) if self.current_path else "")
-        output_var = tk.StringVar(value="")
+        # Папки запоминаются между запусками: сначала берём то, что использовалось
+        # в диалоге извлечения в прошлый раз, а если их ещё не было — текущую папку модов.
+        default_source = CONFIG.get("last_extract_source") or (str(self.current_path) if self.current_path else "")
+        default_output = CONFIG.get("last_extract_output", "")
 
-        title_label = tk.Label(win, text="📦 Извлечь en_us / ru_ru из модов для перевода",
+        source_var = tk.StringVar(value=default_source)
+        output_var = tk.StringVar(value=default_output)
+
+        title_label = tk.Label(win, text=f"📦 Извлечь en_us / {get_target_language()} из модов для перевода",
                                 font=("Segoe UI", 11, "bold"), bg=bg, fg=fg)
         title_label.pack(anchor="w", padx=14, pady=(14, 2))
 
@@ -2257,6 +2799,63 @@ class LocalizationCheckerGUI:
         progress_bar = ttk.Progressbar(win, mode="determinate", style="Custom.Horizontal.TProgressbar")
         progress_bar.pack(fill=tk.X, padx=14, pady=(6, 0))
 
+        # ── Лог обработки: список модов по мере извлечения, с поддержкой копирования ──
+        log_top = tk.Frame(win, bg=bg)
+        log_top.pack(fill=tk.X, padx=14, pady=(10, 2))
+        log_label = tk.Label(log_top, text="Ход извлечения:", font=("Segoe UI", 9, "bold"), bg=bg, fg=fg)
+        log_label.pack(side=tk.LEFT)
+
+        def copy_all_log():
+            lines = list(log_listbox.get(0, tk.END))
+            if not lines:
+                return
+            self.root.clipboard_clear()
+            self.root.clipboard_append("\n".join(lines))
+            self.show_temporary_status(f"Скопировано {len(lines)} строк")
+
+        copy_log_btn = tk.Button(log_top, text="📋 Скопировать всё", font=("Segoe UI", 8),
+                                  bg=hdr_bg, fg=fg, relief=tk.FLAT, padx=6, pady=1,
+                                  command=copy_all_log)
+        copy_log_btn.pack(side=tk.RIGHT)
+
+        log_frame = tk.Frame(win, bg=box_bg, relief=tk.FLAT, bd=1)
+        log_frame.pack(fill=tk.BOTH, expand=True, padx=14, pady=(0, 8))
+
+        log_scroll = tk.Scrollbar(log_frame)
+        log_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+
+        log_listbox = tk.Listbox(
+            log_frame, font=("Consolas", 9), bg=box_bg, fg=fg,
+            selectbackground="#3a7bd5", selectforeground="white",
+            relief=tk.FLAT, bd=0, yscrollcommand=log_scroll.set,
+            activestyle="none", exportselection=False
+        )
+        log_listbox.pack(fill=tk.BOTH, expand=True)
+        log_scroll.config(command=log_listbox.yview)
+
+        def _log_copy_shortcut(event):
+            # Ctrl+A / Ctrl+C работают независимо от раскладки клавиатуры (как и в остальной программе)
+            if not (event.state & 0x4):
+                return None
+            if self.is_select_all_shortcut(event):
+                log_listbox.select_set(0, tk.END)
+                return "break"
+            if self.is_copy_shortcut(event):
+                selected = log_listbox.curselection()
+                lines = [log_listbox.get(i) for i in selected] if selected else list(log_listbox.get(0, tk.END))
+                if lines:
+                    self.root.clipboard_clear()
+                    self.root.clipboard_append("\n".join(lines))
+                    self.show_temporary_status(f"Скопировано {len(lines)} строк")
+                return "break"
+            return None
+
+        log_listbox.bind("<Control-KeyPress>", _log_copy_shortcut)
+
+        def append_log(line: str):
+            log_listbox.insert(tk.END, line)
+            log_listbox.see(tk.END)
+
         btn_row = tk.Frame(win, bg=bg)
         btn_row.pack(fill=tk.X, padx=14, pady=14)
 
@@ -2279,13 +2878,19 @@ class LocalizationCheckerGUI:
             output_path = Path(output_str)
             output_path.mkdir(parents=True, exist_ok=True)
 
+            # Запоминаем папки для следующего открытия этого диалога
+            CONFIG["last_extract_source"] = source_str
+            CONFIG["last_extract_output"] = output_str
+            save_config()
+
             start_btn.config(state=tk.DISABLED)
             status_label.config(text="Поиск модов...")
             progress_bar['value'] = 0
+            log_listbox.delete(0, tk.END)
 
             threading.Thread(
                 target=self._run_extract_stub_workflow,
-                args=(Path(source_str), output_path, win, start_btn, status_label, progress_bar),
+                args=(Path(source_str), output_path, win, start_btn, status_label, progress_bar, append_log),
                 daemon=True
             ).start()
 
@@ -2306,6 +2911,11 @@ class LocalizationCheckerGUI:
             btn_row.configure(bg=new_bg)
             start_btn.configure(bg=new_hdr_bg, fg=new_fg)
             close_btn.configure(bg=new_hdr_bg, fg=new_fg)
+            log_top.configure(bg=new_bg)
+            log_label.configure(bg=new_bg, fg=new_fg)
+            copy_log_btn.configure(bg=new_hdr_bg, fg=new_fg)
+            log_frame.configure(bg=new_entry_bg)
+            log_listbox.configure(bg=new_entry_bg, fg=new_fg)
 
             for row, label, entry, btn in row_widgets:
                 row.configure(bg=new_bg)
@@ -2319,12 +2929,14 @@ class LocalizationCheckerGUI:
         def _on_close():
             if _on_theme_change in self._detail_theme_callbacks:
                 self._detail_theme_callbacks.remove(_on_theme_change)
+            self._extract_dialog_win = None
             win.destroy()
 
         close_btn.config(command=_on_close)
         win.protocol("WM_DELETE_WINDOW", _on_close)
 
-    def _run_extract_stub_workflow(self, source_dir: Path, output_dir: Path, win, start_btn, status_label, progress_bar):
+    def _run_extract_stub_workflow(self, source_dir: Path, output_dir: Path, win, start_btn, status_label,
+                                    progress_bar, append_log: Optional[Callable[[str], None]] = None):
         """Выполняется в фоновом потоке: сканирует моды, спрашивает про перезапись один раз, извлекает файлы."""
         mod_files = find_all_mod_files(source_dir)
 
@@ -2359,13 +2971,39 @@ class LocalizationCheckerGUI:
         def progress_cb(current, total_count):
             self.root.after(0, lambda: (
                 progress_bar.config(value=(current / total_count) * 100),
-                status_label.config(text=f"Обработано ключей: {current}/{total_count}")
+                status_label.config(text=f"Обработано: {current}/{total_count}")
             ))
 
         def phase_cb(text):
             self.root.after(0, lambda: status_label.config(text=text))
 
-        stats = extract_all_translation_stubs(source_dir, output_dir, overwrite_existing, progress_cb, phase_cb)
+        item_status_icons = {
+            'created_from_mod': '✅', 'created_stub': '📝',
+            'skipped': '⏭️', 'error': '❌', 'ok': '📖',
+        }
+
+        def item_cb(result: Dict[str, Any]):
+            if append_log is None:
+                return
+            if result.get('phase') == 'patchouli':
+                icon = item_status_icons.get(result['status'], '📖')
+                line = (f"{icon} {result['mod_name']}  [Patchouli] "
+                        f"en:{result.get('copied_en', 0)} "
+                        f"ru(мод):{result.get('copied_ru_from_mod', 0)} "
+                        f"заготовок:{result.get('created_ru_stub', 0)}")
+            else:
+                icon = item_status_icons.get(result['status'], '•')
+                status_text = {
+                    'created_from_mod': 'перевод взят из мода',
+                    'created_stub': 'создана заготовка (копия en_us)',
+                    'skipped': 'пропущено (уже существовало)',
+                    'error': f"ошибка: {result.get('error', '?')}",
+                }.get(result['status'], result['status'])
+                line = f"{icon} {result['mod_name']}  —  {status_text}"
+            self.root.after(0, lambda: append_log(line))
+
+        stats = extract_all_translation_stubs(source_dir, output_dir, overwrite_existing,
+                                               progress_cb, phase_cb, item_cb)
 
         def show_summary():
             start_btn.config(state=tk.NORMAL)
@@ -2426,6 +3064,10 @@ class LocalizationCheckerGUI:
         self.export_btn.config(state=tk.DISABLED)
         self.progress_bar['value'] = 0
         self.progress_label.config(text="Начало проверки...")
+
+        # Начинаем новое сканирование с чистого листа ошибок — старые уже осели в лог-файле
+        clear_error_log()
+        self.refresh_errors_tab()
         
         # Очищаем предыдущие результаты
         for tree in [self.full_tree, self.partial_tree, self.missing_tree]:
@@ -2548,6 +3190,7 @@ class LocalizationCheckerGUI:
         self.select_btn.config(state=tk.NORMAL)
         self.export_btn.config(state=tk.NORMAL)
         self.progress_label.config(text="Проверка завершена")
+        self.refresh_errors_tab()
     
     def on_search_change(self, *args):
         """Обработчик изменения текста поиска."""
@@ -2594,7 +3237,8 @@ class LocalizationCheckerGUI:
                 mod["mod_name"] + self.get_patchouli_badge(mod),
                 mod["ru_keys"],
                 mod["en_keys"],
-                f"{mod['percentage']}%"
+                f"{mod['percentage']}%",
+                mod.get("identical_count", 0)
             ), tags=(self.get_source_tag(mod.get("source", "none")),))
         
         # Показываем результаты - Неполный перевод
@@ -2610,7 +3254,8 @@ class LocalizationCheckerGUI:
                 mod["ru_keys"],
                 mod["en_keys"],
                 f"{mod['percentage']}%",
-                f"{missing_count} ключей"
+                f"{missing_count} ключей",
+                mod.get("identical_count", 0)
             ), tags=(self.get_percentage_tag(mod["percentage"]),))
         
         # Показываем результаты - Отсутствует
@@ -2620,7 +3265,7 @@ class LocalizationCheckerGUI:
         missing_sorted = self.sort_results(missing_filtered, sort_col, self.sort_state["missing"]["reverse"])
         
         for mod in missing_sorted:
-            reason = mod.get("error", "Нет ru_ru.json")
+            reason = mod.get("error", f"Нет {target_json_filename()}")
             self.missing_tree.insert("", tk.END, values=(
                 mod["mod_name"] + self.get_patchouli_badge(mod),
                 mod["en_keys"],
@@ -2638,7 +3283,8 @@ class LocalizationCheckerGUI:
                 mod["mod_name"] + self.get_patchouli_badge(mod),
                 mod["ru_keys"],
                 mod["en_keys"],
-                f"{mod['percentage']}%"
+                f"{mod['percentage']}%",
+                mod.get("identical_count", 0)
             ), tags=(self.get_source_tag(mod.get("source", "none")),))
 
         # Показываем результаты - Устаревший перевод (из TranslatedMods, но не 100%)
@@ -2654,7 +3300,8 @@ class LocalizationCheckerGUI:
                 mod["ru_keys"],
                 mod["en_keys"],
                 f"{mod['percentage']}%",
-                f"{missing_count} ключей"
+                f"{missing_count} ключей",
+                mod.get("identical_count", 0)
             ), tags=(self.get_source_tag(mod.get("source", "none")),))
     
     def show_details(self, tree):
@@ -2721,6 +3368,13 @@ class LocalizationCheckerGUI:
         if mod_info.get("error"):
             tk.Label(hdr, text=f"⚠️ {mod_info['error']}", font=("Segoe UI", 9),
                      bg=hdr_bg, fg="#f44336", anchor="w").pack(fill=tk.X, pady=(4, 0))
+
+        identical_count = mod_info.get("identical_count", 0)
+        if identical_count:
+            tk.Label(hdr,
+                     text=(f"≈ {identical_count} ключ(ей) переведены так же, как в en_us — "
+                           f"возможно, забыли перевести (см. вкладку ниже)"),
+                     font=("Segoe UI", 9), bg=hdr_bg, fg="#ff9800", anchor="w").pack(fill=tk.X, pady=(4, 0))
 
         # ── Разделитель ─────────────────────────────────────────────────────
         tk.Frame(win, bg=sep_col, height=1).pack(fill=tk.X)
@@ -2828,12 +3482,17 @@ class LocalizationCheckerGUI:
 
             all_theme_callbacks.append(_apply_theme)
 
-        missing_keys = mod_info.get("missing_keys", [])
-        extra_keys   = mod_info.get("extra_keys", [])
+        missing_keys  = mod_info.get("missing_keys", [])
+        extra_keys    = mod_info.get("extra_keys", [])
+        identical_keys = mod_info.get("identical_keys", [])
+
+        cols_frame.columnconfigure(2, weight=1)
 
         make_key_column(cols_frame, 0, "Не хватает", "❌", missing_keys, "Скопировать всё")
         tk.Frame(cols_frame, bg=sep_col, width=1).grid(row=0, column=0, sticky="nse", padx=(0, 5))
         make_key_column(cols_frame, 1, "Лишние ключи", "➕", extra_keys, "Скопировать всё")
+        tk.Frame(cols_frame, bg=sep_col, width=1).grid(row=0, column=1, sticky="nse", padx=(0, 5))
+        make_key_column(cols_frame, 2, "≈ Совпадает с EN", "⚠️", identical_keys, "Скопировать всё")
 
         # ── Вкладка 2: Patchouli гайдбуки ───────────────────────────────────
         pb_outer = tk.Frame(content_host, bg=bg)
@@ -3142,9 +3801,21 @@ def main_cli():
         default=None,
         help="Путь к папке TranslatedMods с переводами (необязательно)"
     )
-    
+
+    parser.add_argument(
+        "--lang", "--target-language",
+        dest="lang",
+        default=None,
+        help="Код целевого языка перевода, например ru_ru, de_de, uk_ua (по умолчанию из config.json)"
+    )
+
     args = parser.parse_args()
-    
+
+    if args.lang:
+        set_target_language(args.lang)
+        CONFIG["target_language"] = get_target_language()
+        save_config()
+
     if args.gui:
         main_gui()
         return 0
@@ -3154,6 +3825,8 @@ def main_cli():
     if not base_path.exists():
         print(f"❌ Ошибка: Директория '{base_path}' не существует")
         return 1
+
+    print(f"🌐 Целевой язык перевода: {get_target_language()}")
     
     # Ищем и устанавливаем путь к TranslatedMods
     translated_mods_path = None
