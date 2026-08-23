@@ -1,37 +1,40 @@
 {
-    "translated_mods_path": "TranslatedMods",
-    "supported_languages": [
-        "ru_ru"
-    ],
-    "target_language": "ru_ru",
-    "max_workers": 4,
-    "show_statistics": true,
-    "default_export_file": "localization_results.json",
-    "last_directory": "",
-    "last_extract_source": "",
-    "last_extract_output": "",
-    "row_colors": {
-        "light": {
-            "jar": "#d4f4dd",
-            "translated_mods": "#9dcafa",
-            "missing": "#ffe4e1"
-        },
-        "dark": {
-            "jar": "#7d8a7d",
-            "translated_mods": "#5f738c",
-            "missing": "#b18a82"
-        }
+  "translated_mods_path": "TranslatedMods",
+  "target_language": "ru_ru",
+  "max_workers": 4,
+  "default_export_file": "localization_results.json",
+  "show_completion_popup": false,
+  "last_directory": "",
+  "last_extract_source": "",
+  "last_extract_output": "",
+  "extract_use_translated_mods": true,
+  "last_copy_mods_dir": "",
+  "window_geometry": "",
+  "column_widths": {
+
+  },
+  "row_colors": {
+    "light": {
+      "jar": "#d4f4dd",
+      "translated_mods": "#9dcafa",
+      "missing": "#ffe4e1"
     },
-    "percentage_colors": {
-        "light": {
-            "high": "#fff3b0",
-            "mid": "#ffd9a0",
-            "low": "#ffc2c2"
-        },
-        "dark": {
-            "high": "#6b6b2e",
-            "mid": "#7a5a2e",
-            "low": "#7a3b3b"
-        }
+    "dark": {
+      "jar": "#7d8a7d",
+      "translated_mods": "#5f738c",
+      "missing": "#b18a82"
     }
+  },
+  "percentage_colors": {
+    "light": {
+      "high": "#fff3b0",
+      "mid": "#ffd9a0",
+      "low": "#ffc2c2"
+    },
+    "dark": {
+      "high": "#6b6b2e",
+      "mid": "#7a5a2e",
+      "low": "#7a3b3b"
+    }
+  }
 }
