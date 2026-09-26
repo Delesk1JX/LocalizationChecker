@@ -184,6 +184,37 @@ DEFAULT_ROW_COLORS: Dict[str, Dict[str, str]] = {
     "dark": {"jar": "#7d8a7d", "translated_mods": "#5f738c", "missing": "#b18a82"},
 }
 
+# Палитра оформления окон (детали мода, диалог извлечения).
+# Раньше цвета дублировались по десятку мест, и пути «при создании окна» и «при
+# смене темы» разошлись: кнопки в окне деталей создавались с #b8c4d4, а после
+# переключения темы становились #dde3ec, шапка — #c8d0de -> #dde3ec. В итоге
+# переключение темы само по себе меняло цвета виджетов. Теперь источник правды один.
+THEMES: Dict[str, Dict[str, str]] = {
+    "light": {
+        "bg": "#f5f5f5",        # фон окон
+        "fg": "#1a1a1a",        # основной текст
+        "panel": "#c8d0de",     # шапки и подложки кнопок
+        "box": "#ffffff",       # списки, поля ввода
+        "btn": "#b8c4d4",       # кнопки
+        "sep": "#c8c8c8",       # разделители
+        "muted": "#5a5a5a",     # приглушённый текст
+    },
+    "dark": {
+        "bg": "#1e1e1e",
+        "fg": "#e0e0e0",
+        "panel": "#2a2a2a",
+        "box": "#252525",
+        "btn": "#3a3a3a",
+        "sep": "#444444",
+        "muted": "#a8a8a8",
+    },
+}
+
+
+def theme_colors(dark: bool) -> Dict[str, str]:
+    """Возвращает копию палитры для нужной темы."""
+    return dict(THEMES["dark" if dark else "light"])
+
 
 def normalize_lang_code(code: str) -> str:
     """Приводит код языка к виду xx_yy (например, 'RU' -> 'ru_ru', 'de-DE' -> 'de_de')."""
@@ -315,6 +346,7 @@ def load_config(config_file: Optional[str] = None) -> None:
         "last_copy_mods_dir": "",
         "window_geometry": "",
         "column_widths": {},
+        "count_empty_as_missing": False,
         "row_colors": DEFAULT_ROW_COLORS
     }
 
@@ -635,8 +667,8 @@ def _parse_lang_text(content: str, source_label: str) -> Dict[str, str]:
     for line_num, line in enumerate(content.splitlines(), 1):
         line = line.strip()
 
-        # Пропускаем пустые строки и комментарии
-        if not line or line.startswith('#'):
+        # В .lang модов встречаются комментарии как с '#', так и с '//'.
+        if not line or line.startswith(('#', '//')):
             continue
 
         # Ищем первое вхождение '=' для разделения ключа и значения
@@ -685,36 +717,108 @@ def parse_lang_file(file_path: Path) -> Optional[Dict[str, str]]:
 
 
 def parse_lang_from_jar(jar_path: Path, lang_path: str) -> Optional[Dict[str, str]]:
-    """
-    Парсит файл локализации .lang из .jar архива.
-    
-    Args:
-        jar_path: Путь к .jar файлу
-        lang_path: Путь внутри архива (например, 'assets/modname/lang/en_US.lang')
-    
-    Returns:
-        Словарь с ключами локализации или None, если файл не найден/ошибка
-    """
+    """Парсит .lang локализации из архива (одноразовая обёртка над JarReader)."""
     try:
-        with zipfile.ZipFile(jar_path, 'r') as jar_file:
-            # Ищем файл внутри архива (регистронезависимый поиск пути)
-            actual_path = None
-            for name in jar_file.namelist():
-                if name.lower() == lang_path.lower():
-                    actual_path = name
-                    break
-            
-            if actual_path is None:
-                return None
-            
-            with jar_file.open(actual_path) as f:
-                raw = f.read()
-            return _parse_lang_text(_decode_lang_bytes(raw), f"{lang_path} из {jar_path}")
-    except (zipfile.BadZipFile, UnicodeDecodeError, KeyError) as e:
+        with _as_reader(jar_path) as reader:
+            return reader.read_lang(lang_path)
+    except zipfile.BadZipFile as e:
         log_warning("Чтение .lang из архива", f"{lang_path} из {jar_path}: {e}")
         return None
     except Exception as e:
         log_warning("Чтение .lang из архива", f"{jar_path} (неожиданная ошибка): {e}")
+        return None
+
+
+class JarReader:
+    """Открывает .jar/.zip ровно один раз и даёт быстрый доступ к записям.
+
+    Зачем: раньше на КАЖДЫЙ файл локализации архив открывался заново, и путь
+    искался линейным перебором namelist() с .lower() на каждую запись. На
+    тяжёлом моде (тысячи файлов + несколько кандидатов локализации в lang/ и
+    language/) это давало 2 + 2N открытий и полных обходов центрального
+    каталога на один мод. Здесь индекс строится один раз, а поиск пути —
+    обращение к словарю.
+
+    Использование:
+        with JarReader(jar_path) as reader:
+            data = reader.read_json('assets/mod/lang/en_us.json')
+    """
+
+    def __init__(self, jar_path: Path):
+        self.path = Path(jar_path)
+        self._zip = zipfile.ZipFile(self.path, 'r')
+        self._names: List[str] = self._zip.namelist()
+        # Нормализованный путь -> реальное имя в архиве (с точным регистром).
+        # setdefault: при дублях в разном регистре берётся первая запись —
+                # так же, как при прежнем линейном поиске.
+        self._index: Dict[str, str] = {}
+        for name in self._names:
+            self._index.setdefault(name.replace('\\', '/').lower(), name)
+
+    @property
+    def names(self) -> List[str]:
+        """Все имена записей архива (в исходном регистре)."""
+        return self._names
+
+    def resolve(self, path: str) -> Optional[str]:
+        """Возвращает реальное имя записи по пути (регистр/слэши не важны)."""
+        return self._index.get(path.replace('\\', '/').lower())
+
+    def read_bytes(self, path: str) -> bytes:
+        actual = self.resolve(path)
+        if actual is None:
+            raise KeyError(path)
+        return self._zip.read(actual)
+
+    def read_json(self, path: str) -> Optional[Dict[str, str]]:
+        """Читает JSON локализации из архива (с поддержкой комментариев)."""
+        try:
+            content = self.read_bytes(path).decode('utf-8-sig')
+        except KeyError:
+            return None
+        except (zipfile.BadZipFile, UnicodeDecodeError) as e:
+            log_warning("Чтение JSON из архива", f"{path} из {self.path}: {e}")
+            return None
+        return _load_json_text(clean_json_with_comments(content), f"{path} из {self.path}")
+
+    def read_lang(self, path: str) -> Optional[Dict[str, str]]:
+        """Читает .lang локализации из архива."""
+        try:
+            raw = self.read_bytes(path)
+        except KeyError:
+            return None
+        except (zipfile.BadZipFile, OSError) as e:
+            log_warning("Чтение .lang из архива", f"{path} из {self.path}: {e}")
+            return None
+        return _parse_lang_text(_decode_lang_bytes(raw), f"{path} из {self.path}")
+
+    def close(self) -> None:
+        try:
+            self._zip.close()
+        except Exception:
+            pass
+
+    def __enter__(self) -> "JarReader":
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self.close()
+
+
+def _as_reader(jar) -> JarReader:
+    """Принимает и JarReader, и путь к архиву (удобно для совместимости)."""
+    return jar if isinstance(jar, JarReader) else JarReader(jar)
+
+
+def _load_json_text(content: str, source_label: str) -> Optional[Dict[str, str]]:
+    """Общий разбор уже очищенного JSON с диагностикой ошибок."""
+    try:
+        return _json_loads_strict(content, source_label)
+    except json.JSONDecodeError as e:
+        log_warning("Чтение JSON", f"{source_label}: {e}")
+        return None
+    except Exception as e:
+        log_warning("Чтение JSON", f"{source_label} (неожиданная ошибка): {e}")
         return None
 
 
@@ -787,9 +891,23 @@ def extract_mod_name_from_assets(jar_path: Path) -> Optional[str]:
     return None
 
 
-def _has_letters(value: str) -> bool:
-    """True, если строка содержит хотя бы одну букву (любого алфавита)."""
-    return any(ch.isalpha() for ch in value)
+# Коды форматирования Minecraft (§c, §l, §4a1f, §x§R§R§G§G§B§B и т.п.). Сами по
+# себе букв не содержат, но 'c' в «§c» и 'a' в «§4a1f» — буквы, поэтому наивная
+# проверка isalpha() считала такие значения «буквенными» и помечала ключи как
+# забытый перевод. hex-коды цвета могут содержать до 6 символов, поэтому через
+# [0-9a-fA-F]{1,6}, а не один символ.
+_FORMATTING_CODE_RE = re.compile(r"§[0-9a-fA-F]{1,6}|§[k-oK-Or]")
+
+# Плейсхолдеры: printf-стиль (%s, %1$s, %.2f, %%) и brace-стиль ({}, {0}, {name}).
+# Буква внутри «%s» — это не текст, который переводили, поэтому значение целиком
+# из плейсхолдеров совпадением с английским считаться не должно.
+_PLACEHOLDER_RE = re.compile(r"%(?:\d+\$)?[-+ #0]*[\d*]*(?:\.\d+)?[a-zA-Z%]|{[^{}]*}")
+
+
+def _has_visible_letters(value: str) -> bool:
+    """True, если в строке есть буквы за вычетом кодов §x и плейсхолдеров."""
+    stripped = _PLACEHOLDER_RE.sub("", _FORMATTING_CODE_RE.sub("", value))
+    return any(ch.isalpha() for ch in stripped)
 
 
 def _find_identical_value_keys(en_data: Dict[str, str], ru_data: Dict[str, str],
@@ -807,7 +925,7 @@ def _find_identical_value_keys(en_data: Dict[str, str], ru_data: Dict[str, str],
         ru_value = str(ru_data.get(key, "")).strip()
         if not en_value or en_value != ru_value:
             continue
-        if not _has_letters(en_value):
+        if not _has_visible_letters(en_value):
             continue
         identical.append(key)
     return sorted(identical)
@@ -815,11 +933,17 @@ def _find_identical_value_keys(en_data: Dict[str, str], ru_data: Dict[str, str],
 
 def _compare_keys(en_data: Dict[str, str], ru_data: Dict[str, str]) -> Dict[str, Any]:
     """
-    Сравнивает ключи английской и русской локализаций.
+    Сравнивает ключи английской и русской локализации.
+
+    Пустые значения (ключ есть, но значение — только пробелы) считаются
+    отдельно в empty_keys: по умолчанию они НЕ портят процент (привычные цифры
+    не меняются), но видны отдельным списком. Если в config.json выставлено
+    count_empty_as_missing=true — они дополнительно попадают в missing_keys
+    и понижают процент.
 
     Returns:
         Словарь с полями: ru_keys, missing_keys, extra_keys, percentage, status,
-        identical_keys, identical_count
+        identical_keys, identical_count, empty_keys, empty_count
     """
     en_keys_set = set(en_data.keys())
     ru_keys_set = set(ru_data.keys())
@@ -831,12 +955,28 @@ def _compare_keys(en_data: Dict[str, str], ru_data: Dict[str, str]) -> Dict[str,
 
     identical_keys = _find_identical_value_keys(en_data, ru_data, shared_keys)
 
+    # Ключ присутствует, но переводить было нечего — считаем «пустым»
+    empty_keys = sorted(
+        key for key in shared_keys
+        if not str(ru_data.get(key, "")).strip()
+    )
+    count_empty_as_missing = bool(CONFIG.get("count_empty_as_missing", False))
+    if count_empty_as_missing and empty_keys:
+        missing_keys = sorted(set(missing_keys) | set(empty_keys))
+
     if en_count == 0:
         percentage = 0.0
         status = "missing"
     else:
-        percentage = round((len(shared_keys) / en_count) * 100, 2)
+        # При count_empty_as_missing пустые значения не считаются переведёнными,
+        # поэтому процент считаем по реально переведённым ключам, а не по shared
+        translated = shared_keys - set(empty_keys) if count_empty_as_missing else shared_keys
+        percentage = round((len(translated) / en_count) * 100, 2)
         status = "full" if percentage == 100.0 else "partial"
+        if count_empty_as_missing and percentage == 0.0:
+            # Файл перевода есть, но переведено в нём ровно ничего — это «Отсутствует».
+            # Без флага 0% означает лишь отсутствие общих ключей и остаётся «Частично».
+            status = "missing"
 
     return {
         "ru_keys": len(ru_data),
@@ -846,20 +986,20 @@ def _compare_keys(en_data: Dict[str, str], ru_data: Dict[str, str]) -> Dict[str,
         "status": status,
         "identical_keys": identical_keys,
         "identical_count": len(identical_keys),
+        "empty_keys": empty_keys,
+        "empty_count": len(empty_keys),
     }
 
 
-def check_translated_mods_localization(jar_path: Path, mod_name: str, en_data: Dict[str, str], en_us_path: str) -> Dict[str, Any]:
+def check_translated_mods_localization(mod_name: str, en_data: Dict[str, str]) -> Dict[str, Any]:
     """
     Проверяет наличие перевода для мода в папке TranslatedMods.
     Поддерживает как .json (Minecraft 1.13+), так и .lang (Minecraft 1.12.2 и ниже) файлы.
-    
+
     Args:
-        jar_path: Путь к .jar файлу мода
         mod_name: Имя мода, извлеченное из assets
         en_data: Данные из en_us.json внутри .jar файла
-        en_us_path: Путь к en_us.json внутри архива
-        
+
     Returns:
         Словарь с результатами проверки или None если TranslatedMods не настроен
     """
@@ -874,6 +1014,8 @@ def check_translated_mods_localization(jar_path: Path, mod_name: str, en_data: D
         "extra_keys": [],
         "identical_keys": [],
         "identical_count": 0,
+        "empty_keys": [],
+        "empty_count": 0,
         "error": None
     }
     
@@ -912,36 +1054,11 @@ def check_translated_mods_localization(jar_path: Path, mod_name: str, en_data: D
 
 
 def extract_json_from_jar(jar_path: Path, lang_path: str) -> Optional[Dict[str, str]]:
-    """
-    Извлекает JSON файл локализации из .jar архива.
-    Поддерживает JSON с комментариями (// и /* */).
-    
-    Args:
-        jar_path: Путь к .jar файлу
-        lang_path: Путь внутри архива (например, 'assets/modname/lang/en_us.json')
-    
-    Returns:
-        Словарь с ключами локализации или None, если файл не найден/ошибка
-    """
+    """Читает JSON локализации из архива (одноразовая обёртка над JarReader)."""
     try:
-        with zipfile.ZipFile(jar_path, 'r') as jar_file:
-            # Ищем файл внутри архива (регистронезависимый поиск пути)
-            actual_path = None
-            for name in jar_file.namelist():
-                if name.lower() == lang_path.lower():
-                    actual_path = name
-                    break
-            
-            if actual_path is None:
-                return None
-            
-            with jar_file.open(actual_path) as f:
-                # Используем utf-8-sig для корректной обработки BOM (Byte Order Mark)
-                content = f.read().decode('utf-8-sig')
-                # Удаляем комментарии перед парсингом
-                content = clean_json_with_comments(content)
-                return _json_loads_strict(content, f"{lang_path} из {jar_path}")
-    except (zipfile.BadZipFile, json.JSONDecodeError, UnicodeDecodeError, KeyError) as e:
+        with _as_reader(jar_path) as reader:
+            return reader.read_json(lang_path)
+    except zipfile.BadZipFile as e:
         log_warning("Чтение JSON из архива", f"{lang_path} из {jar_path}: {e}")
         return None
     except Exception as e:
@@ -949,221 +1066,194 @@ def extract_json_from_jar(jar_path: Path, lang_path: str) -> Optional[Dict[str, 
         return None
 
 
-def check_patchouli_books(jar_path: Path) -> List[Dict[str, Any]]:
-    """
-    Проверяет наличие русской локализации для Patchouli гайдбуков внутри .jar архива.
+def parse_patchouli_index(names: List[str]) -> Dict[str, Dict[str, Any]]:
+    """Группирует страницы Patchouli-гайдбуков по именам записей архива.
 
-    Patchouli хранит страницы гайдбука как отдельные .json файлы по пути:
-      assets/<modname>/patchouli_books/<bookname>/<lang>/entries/...
-      assets/<modname>/patchouli_books/<bookname>/<lang>/categories/...
-
-    Логика простая (вариант 1): сравниваем наличие файлов в en_us/ vs ru_ru/.
+    Один разбор на оба сценария (проверка локализации и извлечение заготовок) —
+    раньше структура assets/<mod>/patchouli_books/<book>/<lang>/... разбиралась
+    дважды почти одинаковым кодом.
 
     Returns:
-        Список словарей — по одному на каждый найденный гайдбук.
+        {'<mod>/<book>': {'mod_name', 'book_name',
+                          'en': {относительный_путь: имя_в_архиве},
+                          'ru': {...}}}
     """
-    results = []
-    try:
-        with zipfile.ZipFile(jar_path, 'r') as jar_file:
-            all_names = jar_file.namelist()
-    except zipfile.BadZipFile:
-        return results
+    books: Dict[str, Dict[str, Any]] = {}
 
-    # Собираем все пути внутри patchouli_books
-    patchouli_files = [
-        name.replace('\\', '/') for name in all_names
-        if 'patchouli_books' in name.replace('\\', '/').lower()
-    ]
-
-    if not patchouli_files:
-        return results
-
-    # Группируем по (mod_name, book_name)
-    books: Dict[str, Dict[str, set]] = {}
-    for raw_path in patchouli_files:
+    for raw_path in names:
         path = raw_path.replace('\\', '/')
+        if 'patchouli_books' not in path.lower():
+            continue
+
         parts = path.split('/')
-        # Ожидаем: assets/<mod>/patchouli_books/<book>/<lang>/...
         try:
             assets_idx = next(i for i, p in enumerate(parts) if p.lower() == 'assets')
             pb_idx     = next(i for i, p in enumerate(parts) if p.lower() == 'patchouli_books')
         except StopIteration:
             continue
 
-        if pb_idx - assets_idx != 2:
+        # Ожидаем ровно assets/<mod>/patchouli_books/<book>/<lang>/...
+        if pb_idx - assets_idx != 2 or len(parts) <= pb_idx + 2:
             continue
-        if len(parts) <= pb_idx + 2:
-            continue
+
+        rest = '/'.join(parts[pb_idx + 3:])
+        if not rest or raw_path.endswith('/'):
+            continue  # папка, не файл
 
         mod_name  = parts[assets_idx + 1]
         book_name = parts[pb_idx + 1]
-        lang_raw  = parts[pb_idx + 2]
-        lang      = lang_raw.lower()
-        # Остаток пути — сам файл
-        rest = '/'.join(parts[pb_idx + 3:])
+        lang      = parts[pb_idx + 2].lower()
 
-        if not rest or rest.endswith('/'):
-            continue  # папка, не файл
-
-        key = f"{mod_name}/{book_name}"
-        if key not in books:
-            books[key] = {'mod_name': mod_name, 'book_name': book_name,
-                          'en_files': set(), 'ru_files': set()}
-
-        # Сравниваем без учёта регистра: en_us == en_US, а целевой язык — по TARGET_LANG_CODE
-        if lang in ('en_us',):
-            books[key]['en_files'].add(rest)
+        entry = books.setdefault(f"{mod_name}/{book_name}", {
+            'mod_name': mod_name,
+            'book_name': book_name,
+            'en': {},
+            'ru': {},
+        })
+        # Сравниваем без учёта регистра: en_us == en_US, целевой — по TARGET_LANG_CODE
+        if lang == 'en_us':
+            entry['en'][rest] = raw_path
         elif lang == TARGET_LANG_CODE:
-            books[key]['ru_files'].add(rest)
+            entry['ru'][rest] = raw_path
 
-    for key, book in books.items():
-        en_files = book['en_files']
-        ru_files = book['ru_files']
+    return books
 
-        if not en_files:
+
+def _patchouli_stats(en_files, ru_files) -> Dict[str, Any]:
+    """Считает покрытие гайдбука по наборам файлов en/ru."""
+    total = len(en_files)
+    translated_count = len(set(en_files) & set(ru_files))
+    percentage = round((translated_count / total) * 100, 2) if total else 0.0
+    if percentage == 100.0:
+        status = 'full'
+    elif percentage > 0:
+        status = 'partial'
+    else:
+        status = 'missing'
+    return {
+        'status': status,
+        'percentage': percentage,
+        'en_files': total,
+        'ru_files': len(ru_files),
+        'missing_files': sorted(set(en_files) - set(ru_files)),
+        'extra_files': sorted(set(ru_files) - set(en_files)),
+    }
+
+
+def _translated_mods_book_files(mod_name: str, book_name: str) -> set:
+    """Файлы перевода гайдбука из папки TranslatedMods (пустой набор, если её нет)."""
+    if TRANSLATED_MODS_PATH is None or not TRANSLATED_MODS_PATH.exists():
+        return set()
+    tm_dir = TRANSLATED_MODS_PATH / mod_name / "patchouli_books" / book_name / TARGET_LANG_CODE
+    if not tm_dir.exists():
+        return set()
+    return {f.relative_to(tm_dir).as_posix() for f in tm_dir.rglob("*") if f.is_file()}
+
+
+def check_patchouli_books(jar) -> List[Dict[str, Any]]:
+    """
+    Проверяет наличие перевода целевого языка для Patchouli-гайдбуков.
+
+    Логика простая: сравниваем наличие файлов в en_us/ и в папке перевода,
+    дополняя её файлами из TranslatedMods, если они там есть.
+
+    Returns:
+        Список словарей — по одному на каждый найденный гайдбук.
+    """
+    try:
+        reader = _as_reader(jar)
+    except zipfile.BadZipFile:
+        return []  # битый архив: гайдбуков нет (сам факт ошибки логирует вызывающий)
+    try:
+        books = parse_patchouli_index(reader.names)
+    finally:
+        if reader is not jar:
+            reader.close()
+
+    results: List[Dict[str, Any]] = []
+    for book in books.values():
+        if not book['en']:
             continue  # нет английской версии — нечего проверять
 
-        missing = sorted(en_files - ru_files)
-        extra   = sorted(ru_files - en_files)
-        translated_count = len(en_files & ru_files)
-        total   = len(en_files)
-        percentage = round((translated_count / total) * 100, 2) if total > 0 else 0.0
-
-        if percentage == 100.0:
-            status = 'full'
-        elif percentage > 0:
-            status = 'partial'
-        else:
-            status = 'missing'
-
-        # Проверяем TranslatedMods/<mod>/patchouli_books/<book>/<target_lang>/
-        # и дополняем ru_files файлами оттуда
-        final_ru_count = len(ru_files)
-        if TRANSLATED_MODS_PATH is not None and TRANSLATED_MODS_PATH.exists():
-            tm_ru_dir = TRANSLATED_MODS_PATH / book['mod_name'] / "patchouli_books" / book['book_name'] / TARGET_LANG_CODE
-            if tm_ru_dir.exists():
-                tm_ru_files = set()
-                for f in tm_ru_dir.rglob("*"):
-                    if f.is_file():
-                        rel = f.relative_to(tm_ru_dir).as_posix()
-                        tm_ru_files.add(rel)
-                combined_ru = ru_files | tm_ru_files
-                final_ru_count = len(combined_ru)
-                missing  = sorted(en_files - combined_ru)
-                extra    = sorted(combined_ru - en_files)
-                translated_count = len(en_files & combined_ru)
-                percentage = round((translated_count / total) * 100, 2) if total > 0 else 0.0
-                if percentage == 100.0:
-                    status = 'full'
-                elif percentage > 0:
-                    status = 'partial'
-                else:
-                    status = 'missing'
-
+        ru_files = set(book['ru']) | _translated_mods_book_files(book['mod_name'], book['book_name'])
         results.append({
-            'mod_name':      book['mod_name'],
-            'book_name':     book['book_name'],
-            'status':        status,
-            'en_files':      total,
-            'ru_files':      final_ru_count,
-            'percentage':    percentage,
-            'missing_files': missing,
-            'extra_files':   extra,
+            'mod_name':  book['mod_name'],
+            'book_name': book['book_name'],
+            **_patchouli_stats(book['en'], ru_files),
         })
 
     return results
 
 
-
-def _is_preferred_asset_lang_path(path: str) -> bool:
-    """Возвращает True для пути вида assets/<modid>/lang/<file> или assets/<modid>/language/<file>."""
-    normalized = path.replace('\\', '/').lower()
-    parts = normalized.split('/')
-    if len(parts) < 4 or parts[0] != 'assets':
-        return False
-    # Проверяем, что третий элемент (parts[2]) - это одна из поддерживаемых папок локализации
-    return parts[2] in ('lang', 'language')
-
-
-def _select_best_lang_path(candidates: List[str]) -> Optional[str]:
-    """Выбирает наиболее подходящий путь среди кандидатов."""
-    if not candidates:
-        return None
-
-    preferred = [path for path in candidates if _is_preferred_asset_lang_path(path)]
-    if preferred:
-        return min(preferred, key=lambda p: len(p.replace('\\', '/').split('/')))
-
-    return min(candidates, key=lambda p: len(p.replace('\\', '/').split('/')))
-
-
-def find_mod_lang_files_in_archive(jar_path: Path) -> Dict[str, Dict[str, Any]]:
-    """
-    Ищет языковые файлы в каждом моде внутри .jar/.zip архива.
+def find_mod_lang_files_in_names(names: List[str]) -> Dict[str, Dict[str, Any]]:
+    """Ищет языковые файлы по списку имён записей архива (без открытия архива).
 
     Возвращает словарь модов с кандидатами на пути локализации.
     """
     lang_folder_patterns = ['/lang/', '/language/']
     mods: Dict[str, Dict[str, Any]] = {}
 
-    try:
-        with zipfile.ZipFile(jar_path, 'r') as jar_file:
-            for name in jar_file.namelist():
-                normalized = name.replace('\\', '/').lower()
-                if not any(pattern in normalized for pattern in lang_folder_patterns):
-                    continue
+    for name in names:
+        normalized = name.replace('\\', '/').lower()
+        if not any(pattern in normalized for pattern in lang_folder_patterns):
+            continue
 
-                parts = normalized.split('/')
-                if len(parts) < 4 or parts[0] != 'assets':
-                    continue
+        parts = normalized.split('/')
+        if len(parts) < 4 or parts[0] != 'assets':
+            continue
 
-                mod_name = parts[1]
-                if not mod_name:
-                    continue
+        mod_name = parts[1]
+        if not mod_name:
+            continue
 
-                # Поля называются 'ru_*' исторически, но хранят кандидатов для ТЕКУЩЕГО
-                # целевого языка перевода (TARGET_LANG_CODE / CONFIG["target_language"]),
-                # а не обязательно русского.
-                info = mods.setdefault(mod_name, {
-                    'en_us_candidates': [],
-                    'ru_ru_candidates': [],
-                    'en_lang_candidates': [],
-                    'ru_lang_candidates': [],
-                    'has_lang_dir': False,
-                    'has_lang_files': False
-                })
+        # Поля называются 'ru_*' исторически, но хранят кандидатов для ТЕКУЩЕГО
+        # целевого языка перевода (TARGET_LANG_CODE / CONFIG["target_language"]),
+        # а не обязательно русского.
+        info = mods.setdefault(mod_name, {
+            'en_us_candidates': [],
+            'ru_ru_candidates': [],
+            'en_lang_candidates': [],
+            'ru_lang_candidates': [],
+            'has_lang_dir': False,
+            'has_lang_files': False
+        })
 
-                info['has_lang_dir'] = True
+        info['has_lang_dir'] = True
 
-                if normalized.endswith('/en_us.json'):
-                    info['en_us_candidates'].append(name)
-                elif normalized.endswith('/' + target_json_filename()):
-                    info['ru_ru_candidates'].append(name)
-                elif normalized.endswith('/en_us.lang'):
-                    info['en_lang_candidates'].append(name)
-                    info['has_lang_files'] = True
-                elif normalized.endswith('.lang'):
-                    # Сравниваем по имени файла (без пути) и точному соответствию
-                    # xx_yy.lang выбранному целевому языку — например ru_ru.lang/ru_RU.lang для "ru".
-                    filename = normalized.rsplit('/', 1)[-1]
-                    if _is_target_lang_file(filename):
-                        info['ru_lang_candidates'].append(name)
-                        info['has_lang_files'] = True
-    except zipfile.BadZipFile:
-        return {}
+        if normalized.endswith('/en_us.json'):
+            info['en_us_candidates'].append(name)
+        elif normalized.endswith('/' + target_json_filename()):
+            info['ru_ru_candidates'].append(name)
+        elif normalized.endswith('/en_us.lang'):
+            info['en_lang_candidates'].append(name)
+            info['has_lang_files'] = True
+        elif normalized.endswith('.lang'):
+            # Сравниваем по имени файла (без пути) и точному соответствию
+            # xx_yy.lang выбранному целевому языку — например ru_ru.lang/ru_RU.lang для "ru".
+            filename = normalized.rsplit('/', 1)[-1]
+            if _is_target_lang_file(filename):
+                info['ru_lang_candidates'].append(name)
+                info['has_lang_files'] = True
 
     return mods
 
 
-def _select_mod_lang_paths(mod_info: Dict[str, Any]) -> Tuple[Optional[str], Optional[str], Optional[str], Optional[str], bool, bool]:
-    """
-    Выбирает лучшие пути локализации для одного мода.
-    """
-    en_us_path = _select_best_lang_path(mod_info['en_us_candidates'])
-    ru_ru_path = _select_best_lang_path(mod_info['ru_ru_candidates'])
-    en_lang_path = _select_best_lang_path(mod_info['en_lang_candidates'])
-    ru_lang_path = _select_best_lang_path(mod_info['ru_lang_candidates'])
-    return en_us_path, ru_ru_path, en_lang_path, ru_lang_path, mod_info['has_lang_dir'], mod_info['has_lang_files']
+def find_mod_lang_files_in_archive(jar) -> Dict[str, Dict[str, Any]]:
+    """Ищет языковые файлы в архиве (обёртка: открывает архив и отдаёт имена)."""
+    try:
+        reader = _as_reader(jar)
+    except zipfile.BadZipFile as e:
+        # Повреждённый архив раньше просто исчезал: BadZipFile гасился здесь, и до
+        # обработчика исключений в scan_jars_directory код не доходил, поэтому мод
+        # не появлялся ни в одной вкладке и ни в одной записи об ошибках. Теперь
+        # попадает на вкладку «Ошибки» — с ним хотя бы можно разобраться.
+        log_warning("Чтение архива", f"{Path(jar).name}: повреждённый архив ({e})")
+        return {}
+    try:
+        return find_mod_lang_files_in_names(reader.names)
+    finally:
+        if reader is not jar:
+            reader.close()
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -1189,21 +1279,21 @@ def find_all_mod_files(base_path: Path) -> List[Path]:
     return mod_files
 
 
-def _merge_json_candidates(jar_path: Path, candidates: List[str]) -> Dict[str, str]:
+def _merge_json_candidates(reader, candidates: List[str]) -> Dict[str, str]:
     """Объединяет ключи из нескольких JSON-кандидатов локализации в один словарь."""
     merged: Dict[str, str] = {}
     for candidate in candidates:
-        data = extract_json_from_jar(jar_path, candidate)
+        data = reader.read_json(candidate)
         if data:
             merged.update(data)
     return merged
 
 
-def _merge_lang_candidates(jar_path: Path, candidates: List[str]) -> Dict[str, str]:
+def _merge_lang_candidates(reader, candidates: List[str]) -> Dict[str, str]:
     """Объединяет ключи из нескольких .lang-кандидатов локализации в один словарь."""
     merged: Dict[str, str] = {}
     for candidate in candidates:
-        data = parse_lang_from_jar(jar_path, candidate)
+        data = reader.read_lang(candidate)
         if data:
             merged.update(data)
     return merged
@@ -1217,7 +1307,8 @@ def build_translation_stub_tasks(mod_files: List[Path]) -> List[Dict[str, Any]]:
     tasks: List[Dict[str, Any]] = []
     for jar_path in mod_files:
         try:
-            mods_info = find_mod_lang_files_in_archive(jar_path)
+            with JarReader(jar_path) as reader:
+                mods_info = find_mod_lang_files_in_names(reader.names)
         except Exception:
             continue
         for mod_name, info in mods_info.items():
@@ -1281,14 +1372,17 @@ def extract_translation_stub(task: Dict[str, Any], output_dir: Path, overwrite_e
     is_json = task['is_json']
 
     try:
-        if is_json:
-            en_data = _merge_json_candidates(jar_path, info['en_us_candidates'])
-            ru_data = _merge_json_candidates(jar_path, info['ru_ru_candidates']) if info['ru_ru_candidates'] else None
-            en_filename, ru_filename = "en_us.json", target_json_filename()
-        else:
-            en_data = _merge_lang_candidates(jar_path, info['en_lang_candidates'])
-            ru_data = _merge_lang_candidates(jar_path, info['ru_lang_candidates']) if info['ru_lang_candidates'] else None
-            en_filename, ru_filename = "en_US.lang", target_lang_filename()
+        # Один открытый архив на задачу: раньше каждый кандидат локализации
+        # открывал .jar заново.
+        with JarReader(jar_path) as reader:
+            if is_json:
+                en_data = _merge_json_candidates(reader, info['en_us_candidates'])
+                ru_data = _merge_json_candidates(reader, info['ru_ru_candidates']) if info['ru_ru_candidates'] else None
+                en_filename, ru_filename = "en_us.json", target_json_filename()
+            else:
+                en_data = _merge_lang_candidates(reader, info['en_lang_candidates'])
+                ru_data = _merge_lang_candidates(reader, info['ru_lang_candidates']) if info['ru_lang_candidates'] else None
+                en_filename, ru_filename = "en_US.lang", target_lang_filename()
 
         if not en_data:
             return {'mod_name': mod_name, 'status': 'error', 'error': 'Не удалось прочитать en_us из мода/архива'}
@@ -1350,38 +1444,10 @@ def extract_patchouli_stub_for_jar(jar_path: Path, output_dir: Path, overwrite_e
     }
 
     try:
-        with zipfile.ZipFile(jar_path, 'r') as jar_file:
-            all_names = jar_file.namelist()
-            patchouli_files = [n for n in all_names if 'patchouli_books' in n.replace('\\', '/').lower()]
-            if not patchouli_files:
+        with JarReader(jar_path) as reader:
+            books = parse_patchouli_index(reader.names)
+            if not books:
                 return stats
-
-            # Группируем: (mod, book) -> {'en': {rest: путь_внутри_jar}, 'ru': {...}}
-            books: Dict[str, Dict[str, Any]] = {}
-            for raw_name in patchouli_files:
-                path = raw_name.replace('\\', '/')
-                parts = path.split('/')
-                try:
-                    assets_idx = next(i for i, p in enumerate(parts) if p.lower() == 'assets')
-                    pb_idx     = next(i for i, p in enumerate(parts) if p.lower() == 'patchouli_books')
-                except StopIteration:
-                    continue
-                if pb_idx - assets_idx != 2 or len(parts) <= pb_idx + 2:
-                    continue
-
-                mod_name  = parts[assets_idx + 1]
-                book_name = parts[pb_idx + 1]
-                lang      = parts[pb_idx + 2].lower()
-                rest      = '/'.join(parts[pb_idx + 3:])
-                if not rest or raw_name.endswith('/'):
-                    continue  # это папка, не файл
-
-                key = f"{mod_name}/{book_name}"
-                entry = books.setdefault(key, {'mod_name': mod_name, 'book_name': book_name, 'en': {}, 'ru': {}})
-                if lang == 'en_us':
-                    entry['en'][rest] = raw_name
-                elif lang == TARGET_LANG_CODE:
-                    entry['ru'][rest] = raw_name
 
             for book in books.values():
                 if not book['en']:
@@ -1408,7 +1474,7 @@ def extract_patchouli_stub_for_jar(jar_path: Path, output_dir: Path, overwrite_e
                         continue
 
                     try:
-                        raw_bytes = jar_file.read(jar_internal_path)
+                        raw_bytes = reader.read_bytes(jar_internal_path)
                     except Exception as e:
                         stats['error'] += 1
                         stats['errors'].append(f"{book['mod_name']}/{book['book_name']}/{rest}: {e}")
@@ -1440,7 +1506,7 @@ def extract_patchouli_stub_for_jar(jar_path: Path, output_dir: Path, overwrite_e
                             stats['errors'].append(f"{book['mod_name']}/{book['book_name']}/{rest}: {e}")
                     elif rest in book['ru']:
                         try:
-                            ru_raw = jar_file.read(book['ru'][rest])
+                            ru_raw = reader.read_bytes(book['ru'][rest])
                             with open(ru_target, 'wb') as f:
                                 f.write(ru_raw)
                             stats['copied_ru_from_mod'] += 1
@@ -1566,28 +1632,55 @@ def extract_all_translation_stubs(
     return stats
 
 
-def check_mod_localization(jar_path: Path, mod_name: str, mod_info: Dict[str, Any]) -> Dict[str, Any]:
+def new_mod_result(mod_name: str, status: str = "missing", source: str = "none",
+                   error: Optional[str] = None, patchouli: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+    """Создаёт заготовку результата проверки мода.
+
+    Шаблон результата раньше дублировался в четырёх местах, и при добавлении
+    нового поля (например empty_keys) его забывали дописать хотя бы в одну
+    копию — из-за этого в отчёте и в окне деталей поля не хватало то у одних
+    модов, то у других.
     """
-    Проверяет локализацию одного мода внутри архива.
-    """
-    result = {
-        'mod_name': f"{jar_path.name} ({mod_name})",
-        'status': 'missing',
-        'source': 'none',
-        'ru_keys': 0,
-        'en_keys': 0,
-        'percentage': 0.0,
-        'missing_keys': [],
-        'extra_keys': [],
-        'identical_keys': [],
-        'identical_count': 0,
-        'error': None,
-        'patchouli': []
+    return {
+        "mod_name": mod_name,
+        "status": status,
+        "source": source,
+        "ru_keys": 0,
+        "en_keys": 0,
+        "percentage": 0.0,
+        "missing_keys": [],
+        "extra_keys": [],
+        "identical_keys": [],
+        "identical_count": 0,
+        "empty_keys": [],
+        "empty_count": 0,
+        "error": error,
+        "patchouli": list(patchouli) if patchouli else [],
     }
 
-    en_us_path, ru_ru_path, en_lang_path, ru_lang_path, has_lang_dir, has_lang_files = _select_mod_lang_paths(mod_info)
 
-    if not has_lang_dir:
+def check_mod_localization(jar_path: Path, mod_name: str, mod_info: Dict[str, Any],
+                           reader: Optional[JarReader] = None) -> Dict[str, Any]:
+    """
+    Проверяет локализацию одного мода внутри архива.
+
+    reader — уже открытый JarReader для этого архива. Если не передан, архив
+    открывается здесь (удобно для вызовов по одному моду).
+    """
+    owns_reader = reader is None
+    reader = reader or JarReader(jar_path)
+    try:
+        return _check_mod_localization(jar_path, mod_name, mod_info, reader)
+    finally:
+        if owns_reader:
+            reader.close()
+
+
+def _check_mod_localization(jar_path: Path, mod_name: str, mod_info: Dict[str, Any],
+                            reader: JarReader) -> Dict[str, Any]:
+    result = new_mod_result(f"{jar_path.name} ({mod_name})")
+
+    if not mod_info['has_lang_dir']:
         result['status'] = 'skipped'
         result['error'] = 'Папка локализации (lang/language) не найдена в моде'
         return result
@@ -1597,7 +1690,7 @@ def check_mod_localization(jar_path: Path, mod_name: str, mod_info: Dict[str, An
 
     # Собираем ключи из ВСЕХ en_us.json кандидатов (lang + language)
     for candidate in mod_info['en_us_candidates']:
-        data = extract_json_from_jar(jar_path, candidate)
+        data = reader.read_json(candidate)
         if data:
             en_data.update(data)
             if en_source is None:
@@ -1606,7 +1699,7 @@ def check_mod_localization(jar_path: Path, mod_name: str, mod_info: Dict[str, An
     # Если JSON не нашли — пробуем все .lang кандидаты
     if not en_data:
         for candidate in mod_info['en_lang_candidates']:
-            data = parse_lang_from_jar(jar_path, candidate)
+            data = reader.read_lang(candidate)
             if data:
                 en_data.update(data)
                 if en_source is None:
@@ -1624,7 +1717,7 @@ def check_mod_localization(jar_path: Path, mod_name: str, mod_info: Dict[str, An
         return result
 
     if TRANSLATED_MODS_PATH is not None:
-        translated_mods_result = check_translated_mods_localization(jar_path, mod_name, en_data, en_source)
+        translated_mods_result = check_translated_mods_localization(mod_name, en_data)
         if translated_mods_result['found']:
             is_full = translated_mods_result['status'] == 'full'
             result.update({
@@ -1635,20 +1728,22 @@ def check_mod_localization(jar_path: Path, mod_name: str, mod_info: Dict[str, An
                 'missing_keys': translated_mods_result['missing_keys'],
                 'extra_keys': translated_mods_result['extra_keys'],
                 'identical_keys': translated_mods_result.get('identical_keys', []),
-                'identical_count': translated_mods_result.get('identical_count', 0)
+                'identical_count': translated_mods_result.get('identical_count', 0),
+                'empty_keys': translated_mods_result.get('empty_keys', []),
+                'empty_count': translated_mods_result.get('empty_count', 0)
             })
             return result
 
     # Собираем ru ключи из всех кандидатов (lang + language)
     ru_data: Dict[str, str] = {}
     for candidate in mod_info['ru_ru_candidates']:
-        data = extract_json_from_jar(jar_path, candidate)
+        data = reader.read_json(candidate)
         if data:
             ru_data.update(data)
 
     if not ru_data:
         for candidate in mod_info['ru_lang_candidates']:
-            data = parse_lang_from_jar(jar_path, candidate)
+            data = reader.read_lang(candidate)
             if data:
                 ru_data.update(data)
 
@@ -1676,10 +1771,22 @@ def check_jar_localization(jar_path: Path) -> List[Dict[str, Any]]:
     Returns:
         Список результатов проверки для каждого найденного мода внутри архива
     """
-    mods_info = find_mod_lang_files_in_archive(jar_path)
+    # Один ZipFile на весь архив: и список имён, и чтение файлов локализации.
+    # Раньше здесь плюс check_patchouli_books открывали архив дважды, а затем
+    # каждый файл локализации открывал его ещё раз — до 2 + 2N раз на мод.
+    try:
+        with JarReader(jar_path) as reader:
+            return _check_jar_localization(jar_path, reader)
+    except zipfile.BadZipFile as e:
+        log_warning("Чтение архива", f"{jar_path.name}: повреждённый архив ({e})")
+        return []
+
+
+def _check_jar_localization(jar_path: Path, reader: JarReader) -> List[Dict[str, Any]]:
+    mods_info = find_mod_lang_files_in_names(reader.names)
 
     # Проверяем Patchouli гайдбуки (один раз на весь jar)
-    patchouli_books = check_patchouli_books(jar_path)
+    patchouli_books = check_patchouli_books(reader)
     # Индексируем по mod_name для быстрого поиска
     patchouli_by_mod: Dict[str, List[Dict]] = {}
     for book in patchouli_books:
@@ -1703,38 +1810,24 @@ def check_jar_localization(jar_path: Path) -> List[Dict[str, Any]]:
                         f"; не переведено файлов гайдбука: {missing_book_files} "
                         f"(путь: TranslatedMods/<мод>/patchouli_books/<книга>/{TARGET_LANG_CODE}/)"
                     )
-                results.append({
-                    "mod_name": f"{jar_path.name} ({mod_name})",
-                    "status": "translated" if all_books_full else "missing",
-                    "source": "none",
-                    "ru_keys": 0,
-                    "en_keys": 0,
-                    "percentage": 0.0,
-                    "missing_keys": [],
-                    "extra_keys": [],
-                    "identical_keys": [],
-                    "identical_count": 0,
-                    "error": None if all_books_full else reason,
-                    "patchouli": books
-                })
+                results.append(
+                    new_mod_result(
+                        f"{jar_path.name} ({mod_name})",
+                        status="translated" if all_books_full else "missing",
+                        error=None if all_books_full else reason,
+                        patchouli=books,
+                    )
+                )
             return results
-        return [{
-            "mod_name": jar_path.name,
-            "status": "skipped",
-            "source": "none",
-            "ru_keys": 0,
-            "en_keys": 0,
-            "percentage": 0.0,
-            "missing_keys": [],
-            "extra_keys": [],
-            "identical_keys": [],
-            "identical_count": 0,
-            "error": "Папка локализации (lang/language) не найдена в архиве (мод пропущен)"
-        }]
+        return [new_mod_result(
+            jar_path.name,
+            status="skipped",
+            error="Папка локализации (lang/language) не найдена в архиве (мод пропущен)",
+        )]
 
     results: List[Dict[str, Any]] = []
     for mod_name, mod_info in sorted(mods_info.items()):
-        mod_result = check_mod_localization(jar_path, mod_name, mod_info)
+        mod_result = _check_mod_localization(jar_path, mod_name, mod_info, reader)
         # Прикрепляем данные Patchouli если они есть для этого мода
         mod_result['patchouli'] = patchouli_by_mod.get(mod_name, [])
         results.append(mod_result)
@@ -1783,24 +1876,12 @@ def scan_jars_directory(base_path: Path, progress_callback=None) -> Dict[str, Li
                 log_warning("Обработка мода", f"{jar_path}: {e}")
                 if progress_callback:
                     progress_callback(i + 1, total)
-                # Раньше сбойный архив просто пропускался и не попадал ни в одну вкладку —
-                # его нельзя было ни увидеть в таблице, ни выбрать чекбоксом, ни скопировать
-                # через "Скопировать моды". Теперь заносим его в "Отсутствует" с явной причиной,
-                # чтобы с ним можно было работать так же, как с остальными модами.
-                results["missing"].append({
-                    "mod_name": jar_path.name,
-                    "status": "missing",
-                    "source": "none",
-                    "ru_keys": 0,
-                    "en_keys": 0,
-                    "percentage": 0.0,
-                    "missing_keys": [],
-                    "extra_keys": [],
-                    "identical_keys": [],
-                    "identical_count": 0,
-                    "error": f"Ошибка обработки архива: {e}",
-                    "patchouli": []
-                })
+                # Сбойный архив попадает в "Отсутствует" с явной причиной, чтобы его
+                # можно было увидеть в таблице, отметить чекбоксом и скопировать
+                # через "Скопировать моды".
+                results["missing"].append(
+                    new_mod_result(jar_path.name, error=f"Ошибка обработки архива: {e}")
+                )
                 continue
 
             if progress_callback:
@@ -1867,6 +1948,12 @@ class LocalizationCheckerGUI:
         self.checked_mods: Dict[str, set] = {
             "full": set(), "partial": set(), "missing": set(), "translated": set(), "outdated": set()
         }
+        # Категории, таблицы которых устарели (apply_filter пересобирает только активную)
+        self._dirty_categories: set = set()
+        # Открытые окна деталей по модам: {mod_name: Toplevel}. Нужно, чтобы
+        # повторное открытие того же мода не создавало второе окно, а поднимало
+        # уже существующее.
+        self._detail_windows: Dict[str, Any] = {}
         # Время последнего клика по чекбоксу конкретной строки — для защиты от случайного
         # двойного клика (см. on_tree_mod_click). Ключ — (id(tree), row_id).
         self._last_checkbox_click: Dict[Any, float] = {}
@@ -2077,9 +2164,19 @@ class LocalizationCheckerGUI:
                                          command=self.copy_category_mods, style="Custom.TButton")
         self.copy_mods_btn.pack(side=tk.LEFT)
 
+        # Счётчик отмеченных чекбоксами модов активной вкладки.
+        # Пустой текст, когда ничего не выбрано, чтобы не занимать место зря.
+        self.checked_counter_label = tk.Label(self._tab_toolbar, text="", bg="#f0f0f0", fg="gray")
+        self.checked_counter_label.pack(side=tk.LEFT, padx=(8, 0))
+
         # Подпись кнопки "Выбрать все"/"Снять все" зависит от того, что отмечено в активной
-        # вкладке — пересчитываем при переключении вкладок.
-        self.notebook.bind("<<NotebookTabChanged>>", lambda e: self._update_select_toggle_btn_text())
+        # вкладке — пересчитываем при переключении вкладок. Заодно достраиваем
+        # таблицу, если apply_filter её не трогал (ленивая пересборка).
+        def _on_tab_changed(e=None):
+            self.refresh_dirty_categories()
+            self._update_select_toggle_btn_text()
+
+        self.notebook.bind("<<NotebookTabChanged>>", _on_tab_changed)
 
         # Глобальная привязка Ctrl+C, чтобы копирование работало независимо от фокуса и раскладки
         self.root.bind_all("<Control-KeyPress>", self.on_copy_shortcut)
@@ -2278,6 +2375,9 @@ class LocalizationCheckerGUI:
         # Клик по чекбоксу слева от названия мода (только для деревьев с колонкой "Мод")
         if "Мод" in columns:
             tree.bind("<Button-1>", lambda e, t=tree: self.on_tree_mod_click(e, t, self.get_tree_category(t)), add="+")
+            # Enter (в т.ч. на цифровой клавиатуре) переключает чекбокс выделенной строки
+            tree.bind("<Return>", lambda e, t=tree: self.on_tree_enter_key(e, t), add="+")
+            tree.bind("<KP_Enter>", lambda e, t=tree: self.on_tree_enter_key(e, t), add="+")
 
         return tree
     
@@ -2308,6 +2408,46 @@ class LocalizationCheckerGUI:
         if text[:1] in ("☑", "☐"):
             return text[1:].strip()
         return text
+
+    def _row_mod_key(self, tree, item_id: str) -> str:
+        """Возвращает бизнес-ключ строки — имя мода без глифа чекбокса и бейджа Patchouli.
+
+        Отметки чекбоксов исторически хранились по iid строки, а глиф рисовался по
+        mod_name из результатов. Эти значения совпадали, пока iid == mod_name; но при
+        коллизии имён (два одноимённых .jar в разных подпапках) _tree_insert_mod_row
+        подставляет "имя#2", и вторая строка переставала показывать отметку, хотя она
+        была в checked_mods. Теперь ключ везде берётся из ячейки — так же, как при
+        отрисовке глифа в apply_filter.
+        """
+        values = tree.item(item_id, "values")
+        if not values:
+            return ""
+        return self._clean_mod_name_for_copy(str(values[0]))
+
+    def _redraw_rows_for_keys(self, tree, category: str, keys) -> None:
+        """Синхронизирует глифы всех видимых строк с указанными ключами.
+
+        Нужно для одноимённых модов из разных подпапок: они делят одну отметку
+        (ключ — имя мода), поэтому перерисовать надо все строки с этим именем,
+        а не только ту, по которой кликнули.
+        """
+        keys = set(keys)
+        if not keys:
+            return
+        checked_set = self.checked_mods.get(category, set())
+        for item_id in tree.get_children():
+            if self._row_mod_key(tree, item_id) not in keys:
+                continue
+            values = tree.item(item_id, "values")
+            if not values:
+                continue
+            rest = self._strip_checkbox_glyph(str(values[0]))
+            glyph = CHECKBOX_ON if self._row_mod_key(tree, item_id) in checked_set else CHECKBOX_OFF
+            new_text = f"{glyph} {rest}"
+            if str(values[0]) != new_text:
+                new_values = list(values)
+                new_values[0] = new_text
+                tree.item(item_id, values=new_values)
 
     def _set_row_checked_display(self, tree, item_id: str, checked: bool):
         """Перерисовывает чекбокс-глиф у строки, не трогая остальную часть названия мода."""
@@ -2385,15 +2525,69 @@ class LocalizationCheckerGUI:
             return "break"
 
         checked_set = self.checked_mods.setdefault(category, set())
-        if row_id in checked_set:
-            checked_set.discard(row_id)
+        mod_key = self._row_mod_key(tree, row_id)
+        if not mod_key:
+            return "break"
+        if mod_key in checked_set:
+            checked_set.discard(mod_key)
             self._set_row_checked_display(tree, row_id, False)
         else:
-            checked_set.add(row_id)
+            checked_set.add(mod_key)
             self._set_row_checked_display(tree, row_id, True)
 
+        self._redraw_rows_for_keys(tree, category, {mod_key})
         self._update_select_toggle_btn_text()
         return "break"  # клик именно по чекбоксу — не выделяем всю строку
+
+    def on_tree_enter_key(self, event, tree):
+        """Enter на выделенной строке переключает её чекбокс — то же, что клик по квадратику."""
+        category = self.get_tree_category(tree)
+        if category is None:
+            return None
+        selection = tree.selection()
+        if not selection:
+            return None
+        row_id = selection[0]
+
+        # Антидребезг против автоповтера клавиши: зажатый Enter не должен
+        # переключать галочку туда-обратно (та же защита, что у двойного клика мышью).
+        now = time.monotonic()
+        key = (id(tree), row_id)
+        last = self._last_checkbox_click.get(key, 0.0)
+        self._last_checkbox_click[key] = now
+        if len(self._last_checkbox_click) > 512:
+            cutoff = now - 5.0
+            self._last_checkbox_click = {
+                k: v for k, v in self._last_checkbox_click.items() if v >= cutoff
+            }
+        if now - last < 0.25:
+            return "break"
+
+        checked_set = self.checked_mods.setdefault(category, set())
+        mod_key = self._row_mod_key(tree, row_id)
+        if not mod_key:
+            return "break"
+        checked = mod_key not in checked_set
+        if checked:
+            checked_set.add(mod_key)
+        else:
+            checked_set.discard(mod_key)
+        self._set_row_checked_display(tree, row_id, checked)
+        self._redraw_rows_for_keys(tree, category, {mod_key})
+        self._update_select_toggle_btn_text()
+        return "break"
+
+    def _visible_mod_keys(self, tree) -> List[str]:
+        """Ключи модов, видимых в дереве (с учётом фильтра поиска), без пустых."""
+        return [key for key in (self._row_mod_key(tree, item_id) for item_id in tree.get_children()) if key]
+
+    def _all_visible_checked(self, tree, category: str) -> bool:
+        """True, если в дереве есть строки и все они отмечены."""
+        keys = self._visible_mod_keys(tree)
+        if not keys:
+            return False
+        checked_set = self.checked_mods.get(category, set())
+        return all(key in checked_set for key in keys)
 
     def toggle_select_all(self):
         """Кнопка «Выбрать все» / «Снять все»: если в активной вкладке отмечено всё видимое —
@@ -2404,31 +2598,39 @@ class LocalizationCheckerGUI:
 
         visible_ids = list(tree.get_children())
         checked_set = self.checked_mods.setdefault(category, set())
-        all_checked = bool(visible_ids) and all(item_id in checked_set for item_id in visible_ids)
 
-        if all_checked:
-            self.checked_mods[category] = set()
+        if self._all_visible_checked(tree, category):
+            for key in self._visible_mod_keys(tree):
+                checked_set.discard(key)
             for item_id in visible_ids:
                 self._set_row_checked_display(tree, item_id, False)
         else:
+            for key in self._visible_mod_keys(tree):
+                checked_set.add(key)
             for item_id in visible_ids:
-                checked_set.add(item_id)
                 self._set_row_checked_display(tree, item_id, True)
 
         self._update_select_toggle_btn_text()
 
     def _update_select_toggle_btn_text(self):
-        """Обновляет подпись кнопки «Выбрать все»/«Снять все» под состояние активной вкладки."""
+        """Обновляет подпись кнопки «Выбрать все»/«Снять все» и счётчик отмеченных модов."""
         if not hasattr(self, "select_toggle_btn"):
             return
         tree, category = self.get_active_category()
         if tree is None:
             self.select_toggle_btn.config(text=f"{CHECKBOX_ON} Выбрать все")
+            self._update_checked_counter(None)
             return
-        visible_ids = list(tree.get_children())
-        checked_set = self.checked_mods.get(category, set())
-        all_checked = bool(visible_ids) and all(item_id in checked_set for item_id in visible_ids)
+        all_checked = self._all_visible_checked(tree, category)
         self.select_toggle_btn.config(text=f"{CHECKBOX_OFF} Снять все" if all_checked else f"{CHECKBOX_ON} Выбрать все")
+        self._update_checked_counter(category)
+
+    def _update_checked_counter(self, category: Optional[str]):
+        """Обновляет счётчик «Выбрано: N» рядом с кнопками вкладки (пустой, если 0)."""
+        if not hasattr(self, "checked_counter_label"):
+            return
+        count = len(self.checked_mods.get(category, set())) if category else 0
+        self.checked_counter_label.config(text=f"Выбрано: {count}" if count else "")
 
     def get_source_tag(self, mod: dict) -> str:
         """Возвращает тег раскраски строки по источнику перевода.
@@ -2512,6 +2714,7 @@ class LocalizationCheckerGUI:
                 self.errors_toolbar.config(bg=dark_bg)
                 self.errors_hint_label.config(bg=dark_bg, fg="#a8a8a8")
                 self._tab_toolbar.config(bg=dark_bg)
+                self.checked_counter_label.config(bg=dark_bg, fg="#a8a8a8")
             except Exception:
                 pass
 
@@ -2597,6 +2800,7 @@ class LocalizationCheckerGUI:
                 self.errors_toolbar.config(bg=default_bg)
                 self.errors_hint_label.config(bg=default_bg, fg="gray")
                 self._tab_toolbar.config(bg=default_bg)
+                self.checked_counter_label.config(bg=default_bg, fg="gray")
             except Exception:
                 pass
 
@@ -2714,6 +2918,7 @@ class LocalizationCheckerGUI:
                     self.root.after_cancel(job)
                 except Exception:
                     pass
+        self._close_all_detail_windows()
         self._persist_window_geometry()
         CONFIG["column_widths"] = self._collect_column_widths()
         save_config()
@@ -2839,20 +3044,15 @@ class LocalizationCheckerGUI:
         # как и раньше, берём вообще всё, что показано в таблице.
         checked_set = self.checked_mods.get(category, set())
         visible_ids = list(tree.get_children())
-        selected_ids = [i for i in visible_ids if i in checked_set] if checked_set else visible_ids
+        selected_ids = [i for i in visible_ids if self._row_mod_key(tree, i) in checked_set] if checked_set else visible_ids
 
         jar_filenames = set()
         for item_id in selected_ids:
-            values = tree.item(item_id).get("values", [])
-            if not values:
-                continue
-            mod_name = str(values[0])
-            # Убираем чекбокс-глиф и бейдж Patchouli, добавленные только для отображения
-            # (используем общий helper, а не хардкод символов — раньше здесь была прежняя
-            # пара "☑"/"☐", и когда глиф "включено" сменили на "☒" для единообразия размера,
-            # эта проверка перестала его узнавать: в имя файла попадал сам глиф, и ВСЕ
+            # Имя мода берём из ячейки единым хелпером — он же убирает глиф чекбокса
+            # и бейдж Patchouli (раньше здесь был хардкод символов, и когда глиф
+            # "включено" сменили на "☒", в имя файла попадал сам глиф, и ВСЕ
             # отмеченные чекбоксом моды считались "не найденными на диске").
-            mod_name = self._clean_mod_name_for_copy(mod_name)
+            mod_name = self._row_mod_key(tree, item_id)
             # Формат имени — "archive.jar (assets_namespace)"; берём часть до скобки
             jar_filename = mod_name.split(" (")[0].strip()
             if jar_filename:
@@ -2944,7 +3144,7 @@ class LocalizationCheckerGUI:
         return False
 
     def on_search_entry_shortcut(self, event):
-        """Обрабатывает Ctrl+A и Ctrl+C в строке поиска независимо от раскладки клавиатуры."""
+        """Обрабатывает Ctrl+A/C/V в строке поиска независимо от раскладки клавиатуры."""
         if not (event.state & 0x4):
             return None
 
@@ -2963,7 +3163,52 @@ class LocalizationCheckerGUI:
                 self.root.clipboard_append(selected)
             return "break"
 
+        if self.is_paste_shortcut(event):
+            self._paste_into_search()
+            return "break"
+
         return None
+
+    def _paste_into_search(self) -> None:
+        """Вставляет текст из буфера в строку поиска по позиции курсора.
+
+        Если в поле есть выделение, оно заменяется вставляемым текстом — как в
+        любом нормальном поле ввода. Раньше ПКМ→«Вставить» всегда дописывал текст
+        в конец строки и игнорировал выделение, а Ctrl+V работал иначе.
+        """
+        try:
+            text = self.root.clipboard_get()
+        except tk.TclError:
+            return
+
+        try:
+            start = self.search_entry.index(tk.SEL_FIRST)
+            end = self.search_entry.index(tk.SEL_LAST)
+            self.search_entry.delete(start, end)
+            insert_at = start
+        except tk.TclError:
+            insert_at = self.search_entry.index(tk.INSERT)
+
+        self.search_entry.insert(insert_at, text)
+        self.search_entry.icursor(insert_at + len(text))
+
+    def is_paste_shortcut(self, event):
+        """Проверяет, что нажат Ctrl+V на любой раскладке клавиатуры."""
+        key = (event.keysym or "").lower()
+        char = (event.char or "").lower()
+        keysym_num = getattr(event, "keysym_num", None)
+        keycode = getattr(event, "keycode", None)
+
+        # Физическая клавиша V в русской раскладке соответствует «м».
+        if key in ("v", "м", "cyrillic_em"):
+            return True
+        if char in ("v", "м"):
+            return True
+        if keysym_num in (ord("v"), ord("V"), ord("м"), ord("М"), 0x043C, 0x041C):
+            return True
+        if keycode in (55, 86, 100):
+            return True
+        return False
 
     def is_copy_shortcut(self, event):
         """Проверяет, что нажат Ctrl+C на любой раскладке клавиатуры."""
@@ -3079,13 +3324,8 @@ class LocalizationCheckerGUI:
         self._open_path_in_explorer(mod_dir)
 
     def _paste_from_clipboard(self, tree):
-        """Вставляет текст из буфера обмена в строку поиска."""
-        try:
-            text = self.root.clipboard_get()
-            current = self.search_var.get()
-            self.search_var.set(current + text)
-        except tk.TclError:
-            pass
+        """Вставка из буфера по команде контекстного меню — единая с Ctrl+V."""
+        self._paste_into_search()
 
     def on_copy_shortcut(self, event):
         """Обрабатывает Ctrl+C на разных раскладках клавиатуры."""
@@ -3281,11 +3521,10 @@ class LocalizationCheckerGUI:
                 pass
             self._extract_dialog_win = None
 
-        bg      = "#1e1e1e" if self.dark_mode else "#f5f5f5"
-        fg      = "#e0e0e0" if self.dark_mode else "#1a1a1a"
-        hdr_bg  = "#2a2a2a" if self.dark_mode else "#c8d0de"
-        entry_bg = "#252525" if self.dark_mode else "#ffffff"
-        box_bg  = "#252525" if self.dark_mode else "#ffffff"
+        c = theme_colors(self.dark_mode)
+        bg, fg, hdr_bg = c["bg"], c["fg"], c["panel"]
+        entry_bg = c["box"]
+        box_bg   = c["box"]
 
         win = tk.Toplevel(self.root)
         self._extract_dialog_win = win
@@ -3466,11 +3705,9 @@ class LocalizationCheckerGUI:
 
         # ── Живое обновление темы, пока окно открыто ────────────────────────
         def _on_theme_change():
-            new_bg     = "#1e1e1e" if self.dark_mode else "#f5f5f5"
-            new_fg     = "#e0e0e0" if self.dark_mode else "#1a1a1a"
-            new_hdr_bg = "#2a2a2a" if self.dark_mode else "#c8d0de"
-            new_entry_bg = "#252525" if self.dark_mode else "#ffffff"
-            new_muted  = "#a8a8a8" if self.dark_mode else "#5a5a5a"
+            c = theme_colors(self.dark_mode)
+            new_bg, new_fg, new_hdr_bg = c["bg"], c["fg"], c["panel"]
+            new_entry_bg, new_muted = c["box"], c["muted"]
 
             win.configure(bg=new_bg)
             title_label.configure(bg=new_bg, fg=new_fg)
@@ -3634,6 +3871,9 @@ class LocalizationCheckerGUI:
         if getattr(self, '_scanning', False):
             return
 
+        # Открытые окна деталей показывают данные ПРОШЛОГО сканирования — закрываем их
+        self._close_all_detail_windows()
+
         self._scanning = True
         self.check_btn.config(state=tk.DISABLED)
         self.refresh_btn.config(state=tk.DISABLED)
@@ -3649,6 +3889,7 @@ class LocalizationCheckerGUI:
         # Новое сканирование — старые отметки чекбоксов относятся к прошлому списку модов
         for category in self.checked_mods:
             self.checked_mods[category].clear()
+        self._update_select_toggle_btn_text()
         
         # Очищаем предыдущие результаты
         for tree in [self.full_tree, self.partial_tree, self.missing_tree]:
@@ -3806,108 +4047,140 @@ class LocalizationCheckerGUI:
             return "  📖⚠️"
         return "  📖❌"
 
+    def _row_values_for(self, category: str, mod: dict):
+        """Значения ячеек строки для категории — единое место, чтобы фильтр,
+        сортировка и пересборка таблиц не расходились в колонках."""
+        mod_name = mod["mod_name"]
+        badge = self.get_patchouli_badge(mod)
+        glyph = self._checkbox_glyph(category, mod_name)
+        head = f"{glyph} {mod_name}{badge}"
+
+        if category == "missing":
+            reason = mod.get("error") or f"Нет {target_json_filename()}"
+            return (head, mod["en_keys"], reason), (self.get_source_tag(mod),)
+
+        if category in ("partial", "outdated"):
+            return (
+                head,
+                mod["ru_keys"],
+                mod["en_keys"],
+                f"{mod['percentage']}%",
+                f"{len(mod['missing_keys'])} ключей",
+                mod.get("identical_count", 0),
+            ), (self.get_percentage_tag(mod["percentage"]),)
+
+        # full / translated
+        return (
+            head,
+            mod["ru_keys"],
+            mod["en_keys"],
+            f"{mod['percentage']}%",
+            mod.get("identical_count", 0),
+        ), (self.get_source_tag(mod),)
+
+    def _rebuild_tree(self, tree, category: str, search_text: str) -> None:
+        """Пересобирает содержимое одной таблицы по фильтру и сортировке."""
+        # Запоминаем выделение и прокрутку: полная пересборка иначе сбрасывала
+        # и то, и другое — при смене темы или при вводе в поиск выделенная
+        # строка «терялась».
+        previously_selected = set(tree.selection())
+        try:
+            scroll_fraction = tree.yview()[0]
+        except Exception:
+            scroll_fraction = 0.0
+
+        for item_id in tree.get_children():
+            tree.delete(item_id)
+
+        for mod in self.results.get(category, []):
+            if search_text and search_text not in mod["mod_name"].lower():
+                continue
+            values, tags = self._row_values_for(category, mod)
+            self._tree_insert_mod_row(tree, mod["mod_name"], values, tags)
+
+        sort_col = self.sort_state[category]["column"] or "Мод"
+        ordered = self.sort_results(
+            [mod for mod in self.results.get(category, [])
+             if not search_text or search_text in mod["mod_name"].lower()],
+            sort_col, self.sort_state[category]["reverse"]
+        )
+        # Переставляем уже вставленные строки в порядке сортировки (move дешевле
+        # повторной вставки и сохраняет выделение)
+        for index, mod in enumerate(ordered):
+            item_id = mod["mod_name"]
+            if tree.exists(item_id):
+                tree.move(item_id, "", index)
+
+        # Восстанавливаем выделение (если строка всё ещё видна) и прокрутку
+        for item_id in previously_selected:
+            if tree.exists(item_id):
+                tree.selection_add(item_id)
+        try:
+            if scroll_fraction:
+                tree.yview_moveto(scroll_fraction)
+        except Exception:
+            pass
+
     def apply_filter(self):
-        """Применяет фильтр поиска и сортировку к таблицам."""
-        search_text = self.search_var.get().lower()
-        
-        # Очищаем все таблицы
-        for item in self.full_tree.get_children():
-            self.full_tree.delete(item)
-        for item in self.partial_tree.get_children():
-            self.partial_tree.delete(item)
-        for item in self.missing_tree.get_children():
-            self.missing_tree.delete(item)
-        for item in self.translated_tree.get_children():
-            self.translated_tree.delete(item)
-        for item in self.outdated_tree.get_children():
-            self.outdated_tree.delete(item)
-        
+        """Применяет фильтр поиска и сортировку к таблицам.
+
+        Пересобирается только АКТИВНАЯ вкладка: раньше фильтр заново вставлял
+        строки во все пять таблиц, что на тысячах модов заметно тормозило,
+        а пользователь всё равно смотрит на одну вкладку. Остальные помечаются
+        «грязными» и обновляются при переключении на них.
+        """
+        if not self.results:
+            for tree in (self.full_tree, self.partial_tree, self.missing_tree,
+                         self.translated_tree, self.outdated_tree):
+                for item_id in tree.get_children():
+                    tree.delete(item_id)
+            self._dirty_categories.clear()
+            return
+
+        search_text = self.search_var.get().strip().lower()
+        tree, category = self.get_active_category()
+        if tree is None:
+            tree, category = self.full_tree, "full"  # вкладка «Ошибки» — обновим первую
+
+        for cat, cat_tree in self._trees_by_key().items():
+            if cat == category or cat not in self.checked_mods:
+                continue
+            # очищаем неактивные таблицы, чтобы в них не осталось старых строк
+            if cat in self._dirty_categories:
+                continue
+            for item_id in cat_tree.get_children():
+                cat_tree.delete(item_id)
+            self._dirty_categories.add(cat)
+
+        self._rebuild_tree(tree, category, search_text)
+        self._dirty_categories.discard(category)
+
+        # Заголовки/счётчик вкладок не меняются, но кнопка «Выбрать все» зависит
+        # от содержимого активной таблицы
+        self._update_select_toggle_btn_text()
+
+    def refresh_dirty_categories(self):
+        """Достраивает «грязные» таблицы при переключении на них."""
         if not self.results:
             return
-        
-        # Показываем результаты - Полный перевод
-        full_filtered = [mod for mod in self.results["full"] 
-                       if search_text in mod["mod_name"].lower()]
-        sort_col = self.sort_state["full"]["column"] or "Мод"
-        full_sorted = self.sort_results(full_filtered, sort_col, self.sort_state["full"]["reverse"])
-        
-        for mod in full_sorted:
-            mod_name = mod["mod_name"]
-            self._tree_insert_mod_row(self.full_tree, mod_name, (
-                f"{self._checkbox_glyph('full', mod_name)} {mod_name}{self.get_patchouli_badge(mod)}",
-                mod["ru_keys"],
-                mod["en_keys"],
-                f"{mod['percentage']}%",
-                mod.get("identical_count", 0)
-            ), (self.get_source_tag(mod),))
-        
-        # Показываем результаты - Неполный перевод
-        partial_filtered = [mod for mod in self.results["partial"]
-                          if search_text in mod["mod_name"].lower()]
-        sort_col = self.sort_state["partial"]["column"] or "Мод"
-        partial_sorted = self.sort_results(partial_filtered, sort_col, self.sort_state["partial"]["reverse"])
-        
-        for mod in partial_sorted:
-            mod_name = mod["mod_name"]
-            missing_count = len(mod["missing_keys"])
-            self._tree_insert_mod_row(self.partial_tree, mod_name, (
-                f"{self._checkbox_glyph('partial', mod_name)} {mod_name}{self.get_patchouli_badge(mod)}",
-                mod["ru_keys"],
-                mod["en_keys"],
-                f"{mod['percentage']}%",
-                f"{missing_count} ключей",
-                mod.get("identical_count", 0)
-            ), (self.get_percentage_tag(mod["percentage"]),))
-        
-        # Показываем результаты - Отсутствует
-        missing_filtered = [mod for mod in self.results["missing"]
-                          if search_text in mod["mod_name"].lower()]
-        sort_col = self.sort_state["missing"]["column"] or "Мод"
-        missing_sorted = self.sort_results(missing_filtered, sort_col, self.sort_state["missing"]["reverse"])
-        
-        for mod in missing_sorted:
-            mod_name = mod["mod_name"]
-            reason = mod.get("error", f"Нет {target_json_filename()}")
-            self._tree_insert_mod_row(self.missing_tree, mod_name, (
-                f"{self._checkbox_glyph('missing', mod_name)} {mod_name}{self.get_patchouli_badge(mod)}",
-                mod["en_keys"],
-                reason
-            ), (self.get_source_tag(mod),))
-
-        # Показываем результаты - Переведён (из TranslatedMods, 100%)
-        translated_filtered = [mod for mod in self.results.get("translated", [])
-                               if search_text in mod["mod_name"].lower()]
-        sort_col = self.sort_state["translated"]["column"] or "Мод"
-        translated_sorted = self.sort_results(translated_filtered, sort_col, self.sort_state["translated"]["reverse"])
-
-        for mod in translated_sorted:
-            mod_name = mod["mod_name"]
-            self._tree_insert_mod_row(self.translated_tree, mod_name, (
-                f"{self._checkbox_glyph('translated', mod_name)} {mod_name}{self.get_patchouli_badge(mod)}",
-                mod["ru_keys"],
-                mod["en_keys"],
-                f"{mod['percentage']}%",
-                mod.get("identical_count", 0)
-            ), (self.get_source_tag(mod),))
-
-        # Показываем результаты - Устаревший перевод (из TranslatedMods, но не 100%)
-        outdated_filtered = [mod for mod in self.results.get("outdated", [])
-                             if search_text in mod["mod_name"].lower()]
-        sort_col = self.sort_state["outdated"]["column"] or "Мод"
-        outdated_sorted = self.sort_results(outdated_filtered, sort_col, self.sort_state["outdated"]["reverse"])
-
-        for mod in outdated_sorted:
-            mod_name = mod["mod_name"]
-            missing_count = len(mod["missing_keys"])
-            self._tree_insert_mod_row(self.outdated_tree, mod_name, (
-                f"{self._checkbox_glyph('outdated', mod_name)} {mod_name}{self.get_patchouli_badge(mod)}",
-                mod["ru_keys"],
-                mod["en_keys"],
-                f"{mod['percentage']}%",
-                f"{missing_count} ключей",
-                mod.get("identical_count", 0)
-            ), (self.get_source_tag(mod),))
+        tree, category = self.get_active_category()
+        if tree is None or category not in self._dirty_categories:
+            return
+        search_text = self.search_var.get().strip().lower()
+        self._rebuild_tree(tree, category, search_text)
+        self._dirty_categories.discard(category)
+        self._update_select_toggle_btn_text()
     
+    def _close_all_detail_windows(self):
+        """Закрывает все открытые окна деталей (перед новым сканированием, при выходе)."""
+        for win in list(self._detail_windows.values()):
+            try:
+                if win.winfo_exists():
+                    win.destroy()
+            except tk.TclError:
+                pass
+        self._detail_windows.clear()
+
     def show_details(self, tree):
         """Показывает детали выбранного мода в структурированном окне."""
         selection = tree.selection()
@@ -3931,21 +4204,34 @@ class LocalizationCheckerGUI:
         if not mod_info:
             return
 
-        # Цвета темы
-        bg      = "#1e1e1e" if self.dark_mode else "#f5f5f5"
-        fg      = "#e0e0e0" if self.dark_mode else "#1a1a1a"
-        hdr_bg  = "#2a2a2a" if self.dark_mode else "#c8d0de"
-        box_bg  = "#252525" if self.dark_mode else "#ffffff"
-        btn_bg  = "#3a3a3a" if self.dark_mode else "#b8c4d4"
-        sep_col = "#444"    if self.dark_mode else "#c8c8c8"
-        muted_fg = "#a8a8a8" if self.dark_mode else "#5a5a5a"
+        # Одно окно деталей на мод: повторный вызов (двойной клик, ПКМ → Подробнее,
+        # Enter) не должен плодить дубли — просто поднимаем уже открытое окно.
+        existing = self._detail_windows.get(mod_name)
+        if existing is not None and existing.winfo_exists():
+            existing.deiconify()
+            existing.lift()
+            try:
+                existing.focus_force()
+            except tk.TclError:
+                pass
+            return
+
+        # Цвета темы — из единой палитры (см. THEMES), чтобы переключение темы
+        # не меняло цвета виджетов по сравнению с только что созданными
+        c = theme_colors(self.dark_mode)
+        bg, fg, hdr_bg = c["bg"], c["fg"], c["panel"]
+        box_bg, btn_bg, sep_col, muted_fg = c["box"], c["btn"], c["sep"], c["muted"]
         pct_col = "#4caf50" if mod_info["percentage"] == 100 else ("#ff9800" if mod_info["percentage"] >= 50 else "#f44336")
 
         win = tk.Toplevel(self.root)
         win.title(f"Детали: {mod_name}")
-        win.geometry("820x520")
+        # Стало просторнее: колонок ключей теперь четыре, а список гайдбуков
+        # у модов с большими книгами не влезал в узкое окно.
+        win.geometry("1000x640")
+        win.minsize(720, 440)
         win.configure(bg=bg)
         win.resizable(True, True)
+        self._detail_windows[mod_name] = win
 
         # ── Шапка ──────────────────────────────────────────────────────────
         hdr = tk.Frame(win, bg=hdr_bg, padx=14, pady=10)
@@ -3979,6 +4265,14 @@ class LocalizationCheckerGUI:
             tk.Label(hdr,
                      text=(f"≈ {identical_count} ключ(ей) переведены так же, как в en_us — "
                            f"возможно, забыли перевести (см. вкладку ниже)"),
+                     font=("Segoe UI", 9), bg=hdr_bg, fg="#ff9800", anchor="w").pack(fill=tk.X, pady=(4, 0))
+
+        empty_count = mod_info.get("empty_count", 0)
+        if empty_count:
+            hint = (" — чтобы такие ключи понижали процент, включите "
+                    "count_empty_as_missing в config.json") if not CONFIG.get("count_empty_as_missing") else ""
+            tk.Label(hdr,
+                     text=f"⭕ {empty_count} ключ(ей) есть, но значение пустое{hint}",
                      font=("Segoe UI", 9), bg=hdr_bg, fg="#ff9800", anchor="w").pack(fill=tk.X, pady=(4, 0))
 
         # ── Разделитель ─────────────────────────────────────────────────────
@@ -4063,12 +4357,9 @@ class LocalizationCheckerGUI:
             listbox.bind("<Control-KeyPress>", _copy_selection)
 
             def _apply_theme():
-                is_dark    = self.dark_mode
-                new_bg     = "#1e1e1e" if is_dark else "#f5f5f5"
-                new_fg     = "#e0e0e0" if is_dark else "#1a1a1a"
-                new_box_bg = "#252525" if is_dark else "#ffffff"
-                new_btn_bg = "#3a3a3a" if is_dark else "#dde3ec"
-                new_sep    = "#444"    if is_dark else "#c8c8c8"
+                c = theme_colors(self.dark_mode)
+                new_bg, new_fg, new_box_bg = c["bg"], c["fg"], c["box"]
+                new_btn_bg, new_sep = c["btn"], c["sep"]
                 frame.config(bg=new_bg)
                 top.config(bg=new_bg)
                 list_frame.config(bg=new_box_bg)
@@ -4088,9 +4379,10 @@ class LocalizationCheckerGUI:
         missing_keys  = mod_info.get("missing_keys", [])
         extra_keys    = mod_info.get("extra_keys", [])
         identical_keys = mod_info.get("identical_keys", [])
+        empty_keys    = mod_info.get("empty_keys", [])
 
-        # Колонки 0/2/4 — списки (тянутся), колонки 1/3 — разделители между ними
-        for col_idx in (0, 2, 4):
+        # Колонки 0/2/4/6 — списки (тянутся), нечётные — разделители между ними
+        for col_idx in (0, 2, 4, 6):
             cols_frame.columnconfigure(col_idx, weight=1)
         cols_frame.rowconfigure(0, weight=1)
 
@@ -4105,6 +4397,8 @@ class LocalizationCheckerGUI:
         make_key_column(cols_frame, 2, "Лишние ключи", "➕", extra_keys, "Скопировать всё")
         make_separator(3)
         make_key_column(cols_frame, 4, "≈ Совпадает с EN", "⚠️", identical_keys, "Скопировать всё")
+        make_separator(5)
+        make_key_column(cols_frame, 6, "Пустые", "⭕", empty_keys, "Скопировать всё")
 
         # ── Вкладка 2: Patchouli гайдбуки ───────────────────────────────────
         pb_outer = tk.Frame(content_host, bg=bg)
@@ -4195,52 +4489,56 @@ class LocalizationCheckerGUI:
                      font=("Segoe UI", 10), bg=bg, fg=muted_fg).pack(pady=40)
 
         # ── Кнопки вкладок ──────────────────────────────────────────────────
-        active_tab_bg   = bg
-        inactive_tab_bg = hdr_bg
-        tab_fg          = fg
-
         pb_label = "📖 Гайдбук" if not patchouli_books else \
             f"📖 Гайдбук ({'✅' if all(b['status']=='full' for b in patchouli_books) else '⚠️' if any(b['status']!='missing' for b in patchouli_books) else '❌'})"
 
         tab_keys_btn = tk.Button(tab_bar, text="🔑 Ключи локализации",
                                  font=("Segoe UI", 9), relief=tk.FLAT, padx=12, pady=5,
-                                 bg=active_tab_bg, fg=tab_fg, bd=0)
+                                 bg=bg, fg=fg, bd=0)
         tab_pb_btn   = tk.Button(tab_bar, text=pb_label,
                                  font=("Segoe UI", 9), relief=tk.FLAT, padx=12, pady=5,
-                                 bg=inactive_tab_bg, fg=tab_fg, bd=0)
+                                 bg=hdr_bg, fg=fg, bd=0)
         tab_keys_btn.pack(side=tk.LEFT)
         tab_pb_btn.pack(side=tk.LEFT)
 
         # Нижняя черта активной вкладки
         tab_indicator = tk.Frame(tab_bar, bg="#3a7bd5", height=2)
-        tab_indicator.place(in_=tab_keys_btn, relx=0, rely=1.0, relwidth=1.0, height=2, y=-2)
+
+        def _paint_tabs(keys_active: bool = True):
+            """Перекрашивает кнопки вкладок и ставит черту под активной.
+
+            Цвета берём из палитры на каждый вызов: раньше они захватывались при
+            создании окна, поэтому после переключения темы клик по вкладке
+            возвращал кнопкам цвета старой темы.
+            """
+            c = theme_colors(self.dark_mode)
+            active_bg, inactive_bg, tab_fg = c["bg"], c["panel"], c["fg"]
+            tab_keys_btn.configure(bg=active_bg if keys_active else inactive_bg, fg=tab_fg)
+            tab_pb_btn.configure(bg=inactive_bg if keys_active else active_bg, fg=tab_fg)
+            tab_indicator.place(in_=tab_keys_btn if keys_active else tab_pb_btn,
+                                relx=0, rely=1.0, relwidth=1.0, height=2, y=-2)
 
         keys_frame.pack(fill=tk.BOTH, expand=True)
+        _paint_tabs(True)
 
         def show_keys_tab():
             pb_outer.pack_forget()
             keys_frame.pack(fill=tk.BOTH, expand=True)
-            tab_keys_btn.config(bg=active_tab_bg)
-            tab_pb_btn.config(bg=inactive_tab_bg)
-            tab_indicator.place(in_=tab_keys_btn, relx=0, rely=1.0, relwidth=1.0, height=2, y=-2)
+            _paint_tabs(True)
 
         def show_pb_tab():
             keys_frame.pack_forget()
             pb_outer.pack(fill=tk.BOTH, expand=True)
-            tab_keys_btn.config(bg=inactive_tab_bg)
-            tab_pb_btn.config(bg=active_tab_bg)
-            tab_indicator.place(in_=tab_pb_btn, relx=0, rely=1.0, relwidth=1.0, height=2, y=-2)
+            _paint_tabs(False)
 
         tab_keys_btn.config(command=show_keys_tab)
         tab_pb_btn.config(command=show_pb_tab)
 
         def _on_theme_change():
-            is_dark    = self.dark_mode
-            new_bg     = "#1e1e1e" if is_dark else "#f5f5f5"
-            new_hdr_bg = "#2a2a2a" if is_dark else "#dde3ec"
-            new_fg     = "#e0e0e0" if is_dark else "#1a1a1a"
-            new_sep    = "#444"    if is_dark else "#c8c8c8"
-            new_pct    = "#4caf50" if mod_info["percentage"] == 100 else ("#ff9800" if mod_info["percentage"] >= 50 else "#f44336")
+            c = theme_colors(self.dark_mode)
+            new_bg, new_fg, new_hdr_bg = c["bg"], c["fg"], c["panel"]
+            new_sep = c["sep"]
+            new_pct = "#4caf50" if mod_info["percentage"] == 100 else ("#ff9800" if mod_info["percentage"] >= 50 else "#f44336")
 
             win.configure(bg=new_bg)
             content_host.configure(bg=new_bg)
@@ -4252,8 +4550,7 @@ class LocalizationCheckerGUI:
             pb_canvas.configure(bg=new_bg)
             pb_inner.configure(bg=new_bg)
             tab_bar.configure(bg=new_hdr_bg)
-            tab_keys_btn.configure(bg=new_bg if keys_frame.winfo_ismapped() else new_hdr_bg, fg=new_fg)
-            tab_pb_btn.configure(bg=new_bg if pb_outer.winfo_ismapped() else new_hdr_bg, fg=new_fg)
+            _paint_tabs(keys_frame.winfo_ismapped())
 
             # Шапка
             hdr.configure(bg=new_hdr_bg)
@@ -4274,6 +4571,11 @@ class LocalizationCheckerGUI:
 
             # Карточки гайдбуков в pb_inner
             for card in pb_inner.winfo_children():
+                # Перекрашиваем только карточки-фреймы. Информационные подписи
+                # вроде «📖 Гайдбуков не обнаружено» лежат на фоне окна — раньше
+                # они тоже красились в цвет шапки и меняли фон при смене темы.
+                if not isinstance(card, tk.Frame):
+                    continue
                 try:
                     card.configure(bg=new_hdr_bg)
                     for w in card.winfo_children():
@@ -4296,14 +4598,24 @@ class LocalizationCheckerGUI:
             for cb in all_theme_callbacks:
                 cb()
 
-        # Регистрируем колбэк; при закрытии окна — снимаем
+        # Регистрируем колбэк; при закрытии окна — снимаем его и запись о окне,
+        # чтобы после закрытия тот же мод снова можно было открыть
         self._detail_theme_callbacks = getattr(self, "_detail_theme_callbacks", [])
         self._detail_theme_callbacks.append(_on_theme_change)
-        win.protocol("WM_DELETE_WINDOW", lambda: (
-            self._detail_theme_callbacks.remove(_on_theme_change)
-            if _on_theme_change in self._detail_theme_callbacks else None,
+
+        def _close_detail_window():
+            if _on_theme_change in self._detail_theme_callbacks:
+                self._detail_theme_callbacks.remove(_on_theme_change)
+            if self._detail_windows.get(mod_name) is win:
+                del self._detail_windows[mod_name]
             win.destroy()
-        ))
+
+        win.protocol("WM_DELETE_WINDOW", _close_detail_window)
+        # Закрытие крестиком у Windows иногда приходит мимо WM_DELETE_WINDOW
+        win.bind("<Destroy>", lambda e, w=win, n=mod_name: (
+            self._detail_windows.pop(n, None)
+            if e.widget is w and not e.widget.winfo_exists() else None
+        ), add="+")
 
     def on_copy_text_shortcut(self, event, text_widget):
         """Обрабатывает Ctrl+C в окне деталей."""
