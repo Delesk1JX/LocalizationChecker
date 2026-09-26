@@ -3447,13 +3447,15 @@ class LocalizationCheckerGUI:
         translated_mods_path = find_translated_mods_directory(self.current_path)
         if translated_mods_path:
             set_translated_mods_path(translated_mods_path)
-            self.open_translated_btn.config(state=tk.NORMAL)
             self.set_status_message(
                 f"Папка: {self.current_path} | TranslatedMods найден: {translated_mods_path}",
                 color="green"
             )
         else:
-            self.open_translated_btn.config(state=tk.DISABLED)
+            # Кнопка всегда остаётся активной: если путь заранее неизвестен,
+            # open_translated_mods_folder сам предложит выбрать папку вручную.
+            # Раньше кнопка здесь гасилась — и попасть в этот диалог было нельзя.
+            self.open_translated_btn.config(state=tk.NORMAL)
             self.set_status_message(
                 f"Папка: {self.current_path} | TranslatedMods не найден",
                 color="green"
@@ -4836,3 +4838,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+
